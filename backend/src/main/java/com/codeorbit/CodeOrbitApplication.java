@@ -121,8 +121,6 @@ public class CodeOrbitApplication {
             }
             return result.toString();
         }
-    }
-
         private AiConfig activeConfig() { return configs.stream().filter(AiConfig::active).findFirst().orElse(configs.getFirst()); }
         private Map<String, Object> publicConfig(AiConfig config) { return Map.of("id", config.id(), "name", config.name(), "baseUrl", config.baseUrl(), "model", config.model(), "active", config.active(), "hasApiKey", !config.apiKey().isBlank()); }
     }
