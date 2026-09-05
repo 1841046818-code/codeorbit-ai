@@ -4,12 +4,12 @@ import vue from '@vitejs/plugin-vue'
 export default defineConfig({
   plugins: [vue()],
   server: {
-    host: 'localhost',
-    port: 5173,
+    host: '127.0.0.1',
+    port: 4173,
     strictPort: false,
   },
   preview: {
-    host: 'localhost',
+    host: '127.0.0.1',
     port: 4173,
     strictPort: false,
   },
