@@ -29,8 +29,14 @@ const activeFile = ref('index.html')
 const isGenerating = ref(false)
 const prompt = ref('')
 const toast = ref('')
+const showModelCenter = ref(false)
+const modelConfigs = ref([])
+const modelForm = ref({ id: '', name: '', baseUrl: 'http://127.0.0.1:11434/v1', apiKey: '', model: 'qwen2.5-coder:7b', active: true })
+const modelBusy = ref(false)
+const modelTest = ref({})
 const now = ref(new Date())
 let ticker
+const API_BASE = 'http://127.0.0.1:8080'
 
 const files = ref({
   'index.html': `<main class="hero">\n  <span class="eyebrow">CODEORBIT AI</span>\n  <h1>把想法，变成可运行的代码。</h1>\n  <p>在星码空间中生成、编辑、预览和评审你的下一个项目。</p>\n  <button id="launch">开始探索</button>\n</main>`,
@@ -75,18 +81,40 @@ function updateFile(value) {
   files.value[activeFile.value] = value
 }
 
-function generateCode() {
+async function generateCode() {
   if (isGenerating.value) return
   isGenerating.value = true
-  toast.value = 'AI 正在分析需求并生成项目文件...'
-  window.setTimeout(() => {
+  toast.value = '正在调用当前模型...'
+  try {
+    const response = await fetch(`${API_BASE}/api/ai/code/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: prompt.value || '生成一个简洁的科技感首页' }) })
+    if (!response.ok) throw new Error(`模型接口返回 HTTP ${response.status}`)
+    const result = await response.json()
+    files.value['index.html'] = result.content || files.value['index.html']
+    activeFile.value = 'index.html'
+    toast.value = `已使用 ${result.model || '当前模型'} 生成代码。`
+  } catch (error) {
+    toast.value = '模型暂时不可用，已切换到演示生成模式。'
+    window.setTimeout(() => {
     files.value['index.html'] = `<main class="hero hero-generated">\n  <div class="orbit-mark">✦</div>\n  <span class="eyebrow">AI GENERATED EXPERIENCE</span>\n  <h1>${prompt.value || '让每一次创作，都有即时回应。'}</h1>\n  <p>这是由星码空间生成的交互式页面，你可以继续编辑并在右侧实时查看效果。</p>\n  <button id="launch">进入工作台</button>\n</main>`
     activeFile.value = 'index.html'
-    isGenerating.value = false
     toast.value = '代码已生成，实时预览已同步更新。'
     window.setTimeout(() => (toast.value = ''), 3200)
-  }, 1200)
+    }, 500)
+  } finally {
+    isGenerating.value = false
+  }
 }
+
+async function loadModelConfigs() {
+  try { const response = await fetch(`${API_BASE}/api/ai/config`); if (!response.ok) return; const data = await response.json(); modelConfigs.value = data.configs || []; } catch { /* 后端未启动时保持本地界面可用 */ }
+}
+function openModelCenter() { showModelCenter.value = true; loadModelConfigs() }
+function editModel(config) { modelForm.value = { id: config.id, name: config.name, baseUrl: config.baseUrl, apiKey: '', model: config.model, active: config.active } }
+function resetModelForm() { modelForm.value = { id: '', name: '', baseUrl: 'http://127.0.0.1:11434/v1', apiKey: '', model: 'qwen2.5-coder:7b', active: modelConfigs.value.length === 0 } }
+async function saveModel() { if (!modelForm.value.name || !modelForm.value.baseUrl || !modelForm.value.model) { toast.value = '请填写模型名称、接口地址和模型名。'; return } modelBusy.value = true; try { const response = await fetch(`${API_BASE}/api/ai/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(modelForm.value) }); if (!response.ok) throw new Error(); const data = await response.json(); modelConfigs.value = data.configs || []; resetModelForm(); toast.value = '模型配置已保存。' } catch { toast.value = '保存失败，请先启动 Java 后端。' } finally { modelBusy.value = false } }
+async function activateModel(id) { try { const response = await fetch(`${API_BASE}/api/ai/config/${id}/activate`, { method: 'POST' }); if (!response.ok) throw new Error(); await loadModelConfigs(); toast.value = '已切换当前模型。' } catch { toast.value = '切换失败，请检查后端。' } }
+async function testModel(id) { modelTest.value[id] = '测试中'; try { const response = await fetch(`${API_BASE}/api/ai/config/${id}/test`, { method: 'POST' }); const data = await response.json(); modelTest.value[id] = data.ok ? '连接成功' : '连接失败' } catch { modelTest.value[id] = '连接失败' } }
+async function removeModel(id) { try { const response = await fetch(`${API_BASE}/api/ai/config/${id}`, { method: 'DELETE' }); if (!response.ok) throw new Error(); await loadModelConfigs(); toast.value = '模型配置已删除。' } catch { toast.value = '至少保留一个模型配置。' } }
 
 function selectNav(label) {
   activeNav.value = label
@@ -95,6 +123,7 @@ function selectNav(label) {
 
 onMounted(() => {
   ticker = window.setInterval(() => (now.value = new Date()), 1000)
+  loadModelConfigs()
 })
 
 onUnmounted(() => window.clearInterval(ticker))
@@ -129,7 +158,7 @@ onUnmounted(() => window.clearInterval(ticker))
       </nav>
       <div class="sidebar-bottom">
         <button class="nav-item" @click="selectNav('知识库')"><FileCode2 :size="17" /><span>知识库</span></button>
-        <button class="nav-item" @click="selectNav('设置')"><Settings2 :size="17" /><span>设置</span></button>
+        <button class="nav-item" @click="openModelCenter"><Settings2 :size="17" /><span>模型中心</span></button>
         <div class="profile-chip"><div class="avatar">林</div><div><strong>林同学</strong><small>成长等级 Lv.08</small></div><CircleHelp :size="15" /></div>
       </div>
     </aside>
@@ -171,10 +200,11 @@ onUnmounted(() => window.clearInterval(ticker))
 
         <section class="studio-layout">
           <article class="panel studio-panel"><div class="panel-heading studio-heading"><div><span class="panel-kicker">CODE STUDIO</span><h2>代码工作台</h2></div><div class="studio-actions"><span class="saved-label"><span></span>已自动保存</span><button class="run-button"><Play :size="14" />运行预览</button></div></div><div class="studio-body"><div class="file-tree"><div class="tree-label">项目文件</div><button v-for="name in Object.keys(files)" :key="name" class="file-item" :class="{ selected: activeFile === name }" @click="activeFile = name"><FileCode2 :size="15" /><span>{{ name }}</span></button><div class="tree-add"><Plus :size="14" />新建文件</div></div><div class="editor-side"><div class="editor-tabs"><button v-for="name in Object.keys(files)" :key="name" :class="{ selected: activeFile === name }" @click="activeFile = name">{{ name }}</button></div><textarea :value="files[activeFile]" spellcheck="false" @input="updateFile($event.target.value)"></textarea><div class="editor-footer"><span>Ln 1, Col 1</span><span>UTF-8</span><span>JavaScript</span></div></div><div class="preview-side"><div class="preview-toolbar"><span><span class="preview-dot"></span>实时预览</span><span class="device-label">桌面 · 100%</span></div><iframe title="代码实时预览" :srcdoc="previewDoc"></iframe></div></div></article>
-          <aside class="side-column"><article class="panel ai-panel"><div class="panel-heading"><div><span class="panel-kicker">AI COPILOT</span><h2>让 AI 帮你写</h2></div><span class="ai-live"><span></span>在线</span></div><p class="ai-hint">描述你想实现的页面或功能，AI 会生成可运行的项目文件。</p><textarea v-model="prompt" class="prompt-input" placeholder="例如：生成一个带流星动画的登录页..." @keydown.enter.exact.prevent="generateCode"></textarea><button class="generate-button" :disabled="isGenerating" @click="generateCode"><Sparkles :size="16" />{{ isGenerating ? '正在生成...' : '生成代码' }}<span>⌘ ↵</span></button><div class="ai-suggestion"><Sparkles :size="14" /><span>试试：增加深色模式和响应式布局</span></div></article><article class="panel issues-panel"><div class="panel-heading"><div><span class="panel-kicker">REVIEW QUEUE</span><h2>待处理问题</h2></div><span class="issue-total">3</span></div><div v-for="issue in issues" :key="issue.title" class="issue-item"><span class="issue-dot" :class="issue.tone"></span><div><strong>{{ issue.title }}</strong><small>{{ issue.file }}</small></div><ChevronRight :size="14" /></div><button class="review-link" @click="selectNav('代码评审')">进入评审中心 <ChevronRight :size="14" /></button></article></aside>
+          <aside class="side-column"><article class="panel ai-panel"><div class="panel-heading"><div><span class="panel-kicker">AI COPILOT</span><h2>让 AI 帮你写</h2></div><button class="model-chip" @click="openModelCenter">模型中心</button></div><p class="ai-hint">描述你想实现的页面或功能，AI 会调用当前选中的模型。</p><textarea v-model="prompt" class="prompt-input" placeholder="例如：生成一个带流星动画的登录页..." @keydown.enter.exact.prevent="generateCode"></textarea><button class="generate-button" :disabled="isGenerating" @click="generateCode"><Sparkles :size="16" />{{ isGenerating ? '正在生成...' : '生成代码' }}<span>⌘ ↵</span></button><div class="ai-suggestion"><Sparkles :size="14" /><span>支持 Ollama、DeepSeek、通义和中转站</span></div></article><article class="panel issues-panel"><div class="panel-heading"><div><span class="panel-kicker">REVIEW QUEUE</span><h2>待处理问题</h2></div><span class="issue-total">3</span></div><div v-for="issue in issues" :key="issue.title" class="issue-item"><span class="issue-dot" :class="issue.tone"></span><div><strong>{{ issue.title }}</strong><small>{{ issue.file }}</small></div><ChevronRight :size="14" /></div><button class="review-link" @click="selectNav('代码评审')">进入评审中心 <ChevronRight :size="14" /></button></article></aside>
         </section>
       </section>
     </main>
+    <div v-if="showModelCenter" class="modal-backdrop" @click.self="showModelCenter = false"><section class="model-modal"><div class="modal-head"><div><span class="panel-kicker">MODEL SWITCHBOARD</span><h2>自定义模型中心</h2><p>兼容 OpenAI API，可接本地模型、云端模型或第三方中转站。</p></div><button class="icon-button" title="关闭" @click="showModelCenter = false">×</button></div><div class="model-list"><div v-for="config in modelConfigs" :key="config.id" class="model-row" :class="{ active: config.active }"><div class="model-status"><span></span></div><div class="model-main"><strong>{{ config.name }}</strong><small>{{ config.model }} · {{ config.baseUrl }}</small></div><span v-if="config.active" class="active-label">当前使用</span><span v-if="modelTest[config.id]" class="test-label">{{ modelTest[config.id] }}</span><button class="row-action" @click="testModel(config.id)">测试</button><button v-if="!config.active" class="row-action primary" @click="activateModel(config.id)">使用</button><button class="row-action danger" @click="removeModel(config.id)">删除</button></div><div v-if="modelConfigs.length === 0" class="empty-model">还没有模型配置，请在下方添加。</div></div><div class="model-form"><div class="form-title">添加或编辑模型</div><div class="form-grid"><label>配置名称<input v-model="modelForm.name" placeholder="例如：我的 DeepSeek 中转" /></label><label>模型名称<input v-model="modelForm.model" placeholder="例如：deepseek-chat" /></label><label class="wide">接口地址<input v-model="modelForm.baseUrl" placeholder="例如：http://127.0.0.1:11434/v1" /></label><label class="wide">API Key <span class="optional">可选，本地 Ollama 不需要</span><input v-model="modelForm.apiKey" type="password" placeholder="sk-..." /></label></div><div class="form-actions"><button class="row-action" @click="resetModelForm">清空</button><button class="generate-button save-model" :disabled="modelBusy" @click="saveModel">{{ modelBusy ? '保存中...' : '保存配置' }}</button></div></div></section></div>
     <transition name="toast"><div v-if="toast" class="toast-message"><Sparkles :size="16" />{{ toast }}</div></transition>
   </div>
 </template>
