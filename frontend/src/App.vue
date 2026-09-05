@@ -64,7 +64,9 @@ const previewDoc = computed(() => {
   const html = files.value['index.html']
   const css = files.value['style.css']
   const js = files.value['script.js']
-  return `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body>${html}<script>${js.replaceAll('</script>', '<\\/script>')}<\/script></body></html>`
+  const endTag = '<' + '/script>'
+  const safeJs = js.split(endTag).join('<' + '\\/script>')
+  return '<!doctype html><html><head><meta charset="utf-8"><style>' + css + '</style></head><body>' + html + '<script>' + safeJs + '<' + '/script></body></html>'
 })
 
 const formattedTime = computed(() => now.value.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }))
