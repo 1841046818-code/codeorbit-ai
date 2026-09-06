@@ -3,6 +3,14 @@ server:
 spring:
   application:
     name: codeorbit-ai-backend
+  datasource:
+    url: ${CODEORBIT_DB_URL:jdbc:mysql://127.0.0.1:3306/codeorbit?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8}
+    username: ${CODEORBIT_DB_USERNAME:root}
+    password: ${CODEORBIT_DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      mode: always
 management:
   endpoints:
     web:

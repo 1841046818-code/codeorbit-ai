@@ -1,9 +1,12 @@
 # 星码空间 CodeOrbit AI
 
-第一阶段工程骨架，包含：
+当前版本已完成前三个阶段，包含：
 
-- `frontend`：Vue 3 + Vite 动态工作台原型
-- `backend`：Java 22 + Spring Boot 健康检查服务
+- `frontend`：Vue 3 + Vite 工作台、登录注册、路由守卫和独立功能页面
+- `backend`：Java 22 + Spring Boot REST API、MySQL 持久化和自动建表
+- 第一阶段：用户认证、路由、工作空间、项目基础数据和数据库接入
+- 第二阶段：项目、任务、计时、签到、统计、代码文件和模型配置持久化
+- 第三阶段：项目管理、AI 生成、代码评审、专注空间、成长数据、知识库入口和响应式布局
 
 ## 启动前端
 
@@ -13,7 +16,7 @@ npm install
 npm run dev
 ```
 
-打开 `http://127.0.0.1:5173/`。
+打开 `http://127.0.0.1:4173/login`。
 
 ## 启动后端
 
@@ -22,7 +25,7 @@ cd D:\毕设\codeorbit-ai\backend
 mvn spring-boot:run
 ```
 
-健康检查：`http://127.0.0.1:8080/api/system/health`
+健康检查：`http://127.0.0.1:8080/actuator/health`
 
 ## 当前可演示流程
 
@@ -32,4 +35,6 @@ mvn spring-boot:run
 4. 在 AI Copilot 输入需求，点击“生成代码”。
 5. 查看项目进度、代码质量、成长热力图和待处理问题。
 
-当前 AI 生成使用前端模拟流程，下一阶段通过 Java 后端接入 Ollama、DeepSeek 或通义千问。
+当前 AI 生成通过后端模型配置接口工作；模型中心支持配置 OpenAI 兼容接口、本地 Ollama、DeepSeek、通义或中转服务。
+
+第四阶段可继续扩展知识库条目持久化、真实 AI 提供商调用、团队协作权限、通知和部署发布能力。
