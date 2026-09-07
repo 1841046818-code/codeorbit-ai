@@ -56,6 +56,9 @@ const projectQuery = ref('')
 const projectStatusFilter = ref('ALL')
 const knowledgeEntries = ref([])
 const knowledgeQuery = ref('')
+const workspaceMembers = ref([])
+const showMembers = ref(false)
+const memberBusy = ref(false)
 let timerTicker
 let fileSaveTimer
 
@@ -227,6 +230,41 @@ async function switchWorkspace(workspace) {
   await loadStats()
   await loadCheckin()
   await loadKnowledge()
+  if (showMembers.value) await loadMembers()
+}
+async function loadMembers() {
+  if (!activeWorkspace.value.id) return
+  try {
+    const response = await fetch(`${API_BASE}/api/workspaces/${activeWorkspace.value.id}/members`, { headers: { Authorization: `Bearer ${getToken()}` } })
+    if (response.ok) { const data = await response.json(); workspaceMembers.value = data.members || [] }
+  } catch { workspaceMembers.value = [] }
+}
+async function openMembers() { showMembers.value = true; await loadMembers() }
+async function inviteMember() {
+  const email = window.prompt('已注册成员邮箱')?.trim()
+  if (!email) return
+  const role = window.prompt('角色：ADMIN、EDITOR 或 VIEWER', 'EDITOR')?.trim().toUpperCase() || 'VIEWER'
+  memberBusy.value = true
+  try {
+    const response = await fetch(`${API_BASE}/api/workspaces/${activeWorkspace.value.id}/members`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` }, body: JSON.stringify({ email, role }) })
+    const data = await response.json()
+    if (!response.ok || data.message?.includes('失败') || !data.member) throw new Error(data.message || '邀请失败')
+    workspaceMembers.value.push(data.member)
+    toast.value = '成员已加入工作空间。'
+  } catch (error) { toast.value = error.message || '成员邀请失败。' } finally { memberBusy.value = false }
+}
+async function changeMemberRole(member) {
+  const role = window.prompt('新角色：ADMIN、EDITOR 或 VIEWER', member.role)?.trim().toUpperCase()
+  if (!role || role === member.role) return
+  const response = await fetch(`${API_BASE}/api/workspaces/${activeWorkspace.value.id}/members/${member.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` }, body: JSON.stringify({ role }) })
+  const data = await response.json()
+  if (response.ok && !data.message?.includes('不能')) { member.role = role; toast.value = '成员角色已更新。' } else toast.value = data.message || '角色更新失败。'
+}
+async function removeMember(member) {
+  if (!window.confirm(`移除成员“${member.name}”？`)) return
+  const response = await fetch(`${API_BASE}/api/workspaces/${activeWorkspace.value.id}/members/${member.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${getToken()}` } })
+  const data = await response.json()
+  if (response.ok && !data.message?.includes('不能')) { workspaceMembers.value = workspaceMembers.value.filter(item => item.id !== member.id); toast.value = '成员已移除。' } else toast.value = data.message || '成员移除失败。'
 }
 async function loadProjects() {
   if (!activeWorkspace.value.id) return
@@ -430,6 +468,7 @@ onUnmounted(() => { window.clearInterval(ticker); window.clearInterval(timerTick
         <ChevronRight :size="16" />
       </button>
       <div v-if="workspaceOpen" class="workspace-menu"><button v-for="workspace in workspaces" :key="workspace.id" :class="{ selected: workspace.id === activeWorkspace.id }" @click="switchWorkspace(workspace)"><Code2 :size="14" /><span>{{ workspace.name }}</span><Check v-if="workspace.id === activeWorkspace.id" :size="14" /></button></div>
+      <button class="members-button" @click="openMembers"><Users :size="15" /><span>团队成员</span></button>
       <div class="nav-group-label">工作台</div>
       <nav>
         <button v-for="item in navItems" :key="item.label" class="nav-item" :class="{ active: activeNav === item.label }" @click="selectNav(item.label)">
@@ -511,6 +550,7 @@ onUnmounted(() => { window.clearInterval(ticker); window.clearInterval(timerTick
         </section>
       </section>
     </main>
+    <div v-if="showMembers" class="modal-backdrop" @click.self="showMembers = false"><section class="model-modal members-modal"><div class="modal-head"><div><span class="panel-kicker">WORKSPACE TEAM</span><h2>团队成员</h2><p>{{ activeWorkspace.name }} · 只有所有者可以管理成员</p></div><button class="icon-button" title="关闭" @click="showMembers = false">×</button></div><div class="members-toolbar"><span>{{ workspaceMembers.length }} 位成员</span><button class="new-project" :disabled="memberBusy" @click="inviteMember"><Plus :size="15" />邀请成员</button></div><div class="model-list"><div v-for="member in workspaceMembers" :key="member.id" class="member-row"><div class="avatar small-avatar">{{ member.name.slice(0, 1) }}</div><div class="model-main"><strong>{{ member.name }}</strong><small>{{ member.email }}</small></div><span class="member-role">{{ member.role }}</span><button v-if="member.role !== 'OWNER'" class="row-action" @click="changeMemberRole(member)">改角色</button><button v-if="member.role !== 'OWNER'" class="row-action danger" @click="removeMember(member)">移除</button></div><div v-if="workspaceMembers.length === 0" class="empty-model">暂无成员数据。</div></div></section></div>
     <div v-if="showModelCenter" class="modal-backdrop" @click.self="showModelCenter = false"><section class="model-modal"><div class="modal-head"><div><span class="panel-kicker">MODEL SWITCHBOARD</span><h2>自定义模型中心</h2><p>兼容 OpenAI API，可接本地模型、云端模型或第三方中转站。</p></div><button class="icon-button" title="关闭" @click="showModelCenter = false">×</button></div><div class="model-list"><div v-for="config in modelConfigs" :key="config.id" class="model-row" :class="{ active: config.active }"><div class="model-status"><span></span></div><div class="model-main"><strong>{{ config.name }}</strong><small>{{ config.model }} · {{ config.baseUrl }}</small></div><span v-if="config.active" class="active-label">当前使用</span><span v-if="modelTest[config.id]" class="test-label">{{ modelTest[config.id] }}</span><button class="row-action" @click="editModel(config)">编辑</button><button class="row-action" @click="testModel(config.id)">测试</button><button v-if="!config.active" class="row-action primary" @click="activateModel(config.id)">使用</button><button class="row-action danger" @click="removeModel(config.id)">删除</button></div><div v-if="modelConfigs.length === 0" class="empty-model">还没有模型配置，请在下方添加。</div></div><div class="model-form"><div class="form-title">添加或编辑模型</div><div class="form-grid"><label>配置名称<input v-model="modelForm.name" placeholder="例如：我的 DeepSeek 中转" /></label><label>模型名称<input v-model="modelForm.model" placeholder="例如：deepseek-chat" /></label><label class="wide">接口地址<input v-model="modelForm.baseUrl" placeholder="例如：http://127.0.0.1:11434/v1" /></label><label class="wide">API Key <span class="optional">可选，本地 Ollama 不需要</span><input v-model="modelForm.apiKey" type="password" placeholder="留空以保留当前 Key" /></label></div><div class="form-actions"><button class="row-action" @click="resetModelForm">清空</button><button class="generate-button save-model" :disabled="modelBusy" @click="saveModel">{{ modelBusy ? '保存中...' : '保存配置' }}</button></div></div></section></div>
     <transition name="toast"><div v-if="toast" class="toast-message"><Sparkles :size="16" />{{ toast }}</div></transition>
   </div>

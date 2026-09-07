@@ -137,6 +137,64 @@ public class CodeOrbitApplication {
             return Map.of("workspace", new WorkspaceView(id, name, input.description() == null ? "" : input.description().trim(), "OWNER"));
         }
 
+        @GetMapping("/{workspaceId}/members")
+        public Map<String, Object> members(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String workspaceId) {
+            UserView user = requireUser(authorization);
+            requireMembership(user.id(), workspaceId);
+            List<MemberView> members = jdbc.query("SELECT u.id, u.name, u.email, wm.role, wm.joined_at FROM workspace_members wm JOIN users u ON u.id = wm.user_id WHERE wm.workspace_id = ? ORDER BY FIELD(wm.role, 'OWNER', 'ADMIN', 'EDITOR', 'VIEWER'), wm.joined_at", (result, row) -> new MemberView(result.getString("id"), result.getString("name"), result.getString("email"), result.getString("role"), result.getTimestamp("joined_at").toInstant().toString()), workspaceId);
+            return Map.of("members", members);
+        }
+
+        @PostMapping("/{workspaceId}/members")
+        public Map<String, Object> invite(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String workspaceId, @RequestBody MemberRequest input) {
+            UserView owner = requireOwner(authorization, workspaceId);
+            String email = input.email() == null ? "" : input.email().trim().toLowerCase();
+            if (email.isBlank()) return Map.of("message", "请输入成员邮箱");
+            List<UserView> matches = jdbc.query("SELECT id, name, email FROM users WHERE email = ?", (result, row) -> new UserView(result.getString("id"), result.getString("name"), result.getString("email")), email);
+            if (matches.isEmpty()) return Map.of("message", "该邮箱尚未注册，请先让对方创建账号");
+            UserView target = matches.getFirst();
+            if (jdbc.queryForObject("SELECT COUNT(*) FROM workspace_members WHERE workspace_id = ? AND user_id = ?", Integer.class, workspaceId, target.id()) > 0) return Map.of("message", "该用户已经是工作空间成员");
+            String role = normalizeRole(input.role());
+            jdbc.update("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)", workspaceId, target.id(), role);
+            return Map.of("message", "成员已加入", "member", new MemberView(target.id(), target.name(), target.email(), role, Instant.now().toString()), "operator", owner.email());
+        }
+
+        @PutMapping("/{workspaceId}/members/{userId}")
+        public Map<String, Object> updateMember(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String workspaceId, @PathVariable String userId, @RequestBody MemberRequest input) {
+            requireOwner(authorization, workspaceId);
+            if (jdbc.queryForObject("SELECT COUNT(*) FROM workspace_members WHERE workspace_id = ? AND user_id = ?", Integer.class, workspaceId, userId) == 0) return Map.of("message", "成员不存在");
+            if (jdbc.queryForObject("SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?", String.class, workspaceId, userId).equals("OWNER")) return Map.of("message", "不能修改所有者角色");
+            String role = normalizeRole(input.role());
+            jdbc.update("UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?", role, workspaceId, userId);
+            return Map.of("message", "成员角色已更新");
+        }
+
+        @DeleteMapping("/{workspaceId}/members/{userId}")
+        public Map<String, Object> removeMember(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String workspaceId, @PathVariable String userId) {
+            requireOwner(authorization, workspaceId);
+            if (jdbc.queryForObject("SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?", String.class, workspaceId, userId).equals("OWNER")) return Map.of("message", "不能移除工作空间所有者");
+            jdbc.update("DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?", workspaceId, userId);
+            return Map.of("message", "成员已移除");
+        }
+
+        private UserView requireOwner(String authorization, String workspaceId) {
+            UserView user = requireUser(authorization);
+            String role = jdbc.queryForObject("SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?", String.class, workspaceId, user.id());
+            if (!"OWNER".equals(role)) throw new IllegalArgumentException("只有工作空间所有者可以管理成员");
+            return user;
+        }
+
+        private void requireMembership(String userId, String workspaceId) {
+            if (workspaceId == null || jdbc.queryForObject("SELECT COUNT(*) FROM workspace_members WHERE workspace_id = ? AND user_id = ?", Integer.class, workspaceId, userId) == 0) throw new IllegalArgumentException("工作空间不存在或无权访问");
+        }
+
+        private static String normalizeRole(String role) {
+            return switch (role == null ? "" : role.toUpperCase()) {
+                case "ADMIN", "EDITOR", "VIEWER" -> role.toUpperCase();
+                default -> "VIEWER";
+            };
+        }
+
         private static String token(String header) { return header != null && header.startsWith("Bearer ") ? header.substring(7) : ""; }
     }
 
@@ -617,6 +675,8 @@ public class CodeOrbitApplication {
     record UserView(String id, String name, String email) {}
     record WorkspaceRequest(String name, String description) {}
     record WorkspaceView(String id, String name, String description, String role) {}
+    record MemberRequest(String email, String role) {}
+    record MemberView(String id, String name, String email, String role, String joinedAt) {}
     record ProjectRequest(String workspaceId, String name, String description, String techStack) {}
     record ProjectUpdateRequest(String name, String description, String techStack, String status) {}
     record ReviewIssueView(String id, String level, String title, String filePath, String status, String createdAt) {}

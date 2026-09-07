@@ -102,6 +102,12 @@ body { background: #050812; }
 .workspace-menu button { width: 100%; display: flex; align-items: center; gap: 8px; padding: 9px 8px; border: 0; border-radius: 5px; color: #88a8c3; background: transparent; text-align: left; font-size: 10px; }
 .workspace-menu button:hover, .workspace-menu button.selected { color: #e3f2ff; background: rgba(91,188,255,.1); }
 .workspace-menu button svg:last-child { margin-left: auto; color: #5bbcff; }
+.members-button { width: 100%; display: flex; align-items: center; gap: 9px; margin-top: 8px; padding: 9px 11px; border: 1px solid rgba(96,154,230,.16); border-radius: 7px; color: #88a8c3; background: rgba(91,188,255,.05); text-align: left; font-size: 10px; }
+.members-button:hover { color: #e3f2ff; border-color: rgba(91,188,255,.4); background: rgba(91,188,255,.1); }
+.members-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px 0; color: #7894ad; font-size: 10px; }
+.member-row { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid rgba(145,196,220,.1); }
+.small-avatar { width: 28px; height: 28px; flex: 0 0 28px; }
+.member-role { color: #65c5ff; font-family: 'DM Mono', monospace; font-size: 9px; }
 .data-overview { padding: 19px; margin-bottom: 14px; }
 .growth-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .growth-grid > div { padding: 15px; border: 1px solid rgba(96,154,230,.15); border-radius: 7px; background: rgba(8,19,40,.42); }
