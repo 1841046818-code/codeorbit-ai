@@ -63,6 +63,9 @@ const memberBusy = ref(false)
 const notifications = ref([])
 const unreadNotifications = ref(0)
 const notificationOpen = ref(false)
+const deployments = ref([])
+const deployEnvironment = ref('PREVIEW')
+const deployBusy = ref(false)
 let timerTicker
 let fileSaveTimer
 
@@ -79,6 +82,7 @@ const navItems = [
   { label: '代码评审', icon: TriangleAlert },
   { label: '专注空间', icon: TimerReset },
   { label: '成长数据', icon: Activity },
+  { label: '发布中心', icon: Rocket },
 ]
 
 const metricCards = computed(() => [
@@ -161,7 +165,7 @@ async function removeProject(project) {
   projects.value = projects.value.filter(item => item.id !== project.id)
   selectedProject.value = projects.value[0] || null
   projectTasks.value = []
-  if (selectedProject.value) { await loadTasks(selectedProject.value.id); await loadProjectFiles(selectedProject.value.id); await loadReviews(selectedProject.value.id) }
+  if (selectedProject.value) { await loadTasks(selectedProject.value.id); await loadProjectFiles(selectedProject.value.id); await loadReviews(selectedProject.value.id); await loadDeployments(selectedProject.value.id) }
   await loadStats()
   toast.value = '项目已删除。'
 }
@@ -293,7 +297,7 @@ async function loadProjects() {
     const data = await response.json()
     projects.value = data.projects || []
     selectedProject.value = projects.value[0] || null
-    if (selectedProject.value) { await loadTasks(selectedProject.value.id); await loadProjectFiles(selectedProject.value.id); await loadReviews(selectedProject.value.id) }
+    if (selectedProject.value) { await loadTasks(selectedProject.value.id); await loadProjectFiles(selectedProject.value.id); await loadReviews(selectedProject.value.id); await loadDeployments(selectedProject.value.id) }
   } catch { /* 后端未启动时保持演示内容 */ }
 }
 async function loadTasks(projectId) {
@@ -314,6 +318,29 @@ async function loadProjectFiles(projectId) {
 }
 async function loadReviews(projectId) {
   try { const response = await fetch(`${API_BASE}/api/projects/${projectId}/reviews`, { headers: { Authorization: `Bearer ${getToken()}` } }); const data = await response.json(); reviewIssues.value = data.issues || [] } catch { reviewIssues.value = [] }
+}
+async function loadDeployments(projectId) {
+  try {
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}/deployments`, { headers: { Authorization: `Bearer ${getToken()}` } })
+    if (response.ok) { const data = await response.json(); deployments.value = data.deployments || [] }
+  } catch { deployments.value = [] }
+}
+async function publishDeployment() {
+  if (!selectedProject.value) { toast.value = '请先选择项目。'; return }
+  deployBusy.value = true
+  try {
+    const response = await fetch(`${API_BASE}/api/projects/${selectedProject.value.id}/deployments`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` }, body: JSON.stringify({ environment: deployEnvironment.value }) })
+    const data = await response.json()
+    if (!response.ok || !data.deployment) throw new Error(data.message || '发布失败')
+    deployments.value.unshift(data.deployment)
+    toast.value = `${data.deployment.version} 已发布。`
+    await loadNotifications()
+  } catch (error) { toast.value = error.message || '发布失败。' } finally { deployBusy.value = false }
+}
+async function rollbackDeployment(deployment) {
+  if (!selectedProject.value || deployment.status === 'PUBLISHED') return
+  const response = await fetch(`${API_BASE}/api/projects/${selectedProject.value.id}/deployments/${deployment.id}/rollback`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` } })
+  if (response.ok) { await loadDeployments(selectedProject.value.id); toast.value = `已回滚到 ${deployment.version}。` }
 }
 async function resolveReview(issue) {
   if (!selectedProject.value) return
@@ -542,12 +569,13 @@ onUnmounted(() => { window.clearInterval(ticker); window.clearInterval(timerTick
         <section v-if="activeNav === '我的项目'" class="page-view panel">
           <div class="page-view-head"><div><span class="panel-kicker">PROJECT MANAGEMENT</span><h2>我的项目</h2><p>管理项目、任务和进度。</p></div><button class="new-project" @click="createProject"><Plus :size="16" />新建项目</button></div>
           <div class="project-toolbar"><div class="project-search"><Search :size="14" /><input v-model="projectQuery" placeholder="搜索项目" /></div><select v-model="projectStatusFilter"><option value="ALL">全部状态</option><option value="IN_PROGRESS">进行中</option><option value="DONE">已完成</option></select></div>
-          <div class="project-page-grid"><button v-for="project in filteredProjects" :key="project.id" class="project-card" :class="{ 'featured-project': selectedProject?.id === project.id }" @click="selectedProject = project; loadTasks(project.id); loadProjectFiles(project.id); loadReviews(project.id)"><div class="project-icon"><FolderKanban :size="19" /></div><div class="project-info"><div class="project-title"><strong>{{ project.name }}</strong><span class="project-badge">{{ project.status === 'DONE' ? '已完成' : '进行中' }}</span></div><p>{{ project.description || project.techStack }}</p><div class="progress-line"><span :style="{ width: `${project.progress}%` }"></span></div><div class="project-meta"><span>{{ project.progress }}% 完成</span><span>{{ project.taskCount }} 个任务</span></div></div><ChevronRight :size="17" /></button></div>
+          <div class="project-page-grid"><button v-for="project in filteredProjects" :key="project.id" class="project-card" :class="{ 'featured-project': selectedProject?.id === project.id }" @click="selectedProject = project; loadTasks(project.id); loadProjectFiles(project.id); loadReviews(project.id); loadDeployments(project.id)"><div class="project-icon"><FolderKanban :size="19" /></div><div class="project-info"><div class="project-title"><strong>{{ project.name }}</strong><span class="project-badge">{{ project.status === 'DONE' ? '已完成' : '进行中' }}</span></div><p>{{ project.description || project.techStack }}</p><div class="progress-line"><span :style="{ width: `${project.progress}%` }"></span></div><div class="project-meta"><span>{{ project.progress }}% 完成</span><span>{{ project.taskCount }} 个任务</span></div></div><ChevronRight :size="17" /></button></div>
           <div v-if="selectedProject" class="project-detail-card"><div class="page-view-head"><div><span class="panel-kicker">PROJECT DETAIL</span><h2>{{ selectedProject.name }}</h2><p>{{ selectedProject.description || '暂无项目描述' }}</p></div><div class="project-actions"><button class="row-action" @click="editProject(selectedProject)">编辑</button><button class="row-action danger" @click="removeProject(selectedProject)">删除</button></div></div><div class="detail-progress"><span :style="{ width: `${selectedProject.progress}%` }"></span></div><div class="project-detail-stats"><span>进度 <strong>{{ selectedProject.progress }}%</strong></span><span>任务 <strong>{{ projectTasks.length }}</strong></span><span>待处理评审 <strong>{{ openReviewCount }}</strong></span></div></div>
         </section>
         <section v-if="activeNav === 'AI 生成'" class="page-view panel ai-page-view"><div class="page-view-head"><div><span class="panel-kicker">AI GENERATOR</span><h2>AI 生成</h2><p>描述需求，生成代码并保存到当前项目。</p></div><button class="model-chip" @click="openModelCenter">模型中心</button></div><textarea v-model="prompt" class="prompt-input large-prompt" placeholder="例如：生成一个带流星动画的登录页..." @keydown.enter.exact.prevent="generateCode"></textarea><button class="generate-button" :disabled="isGenerating" @click="generateCode"><Sparkles :size="16" />{{ isGenerating ? '正在生成...' : '生成代码' }}</button><div class="ai-result"><div class="result-head"><strong>当前项目：{{ selectedProject?.name || '未选择项目' }}</strong><span>{{ selectedProject ? '生成内容会自动保存' : '请先在我的项目中选择项目' }}</span></div><pre>{{ files['index.html'] }}</pre></div></section>
         <section v-if="activeNav === '专注空间'" class="page-view panel focus-page-view"><div class="page-view-head"><div><span class="panel-kicker">FOCUS SPACE</span><h2>专注空间</h2><p>为当前项目记录专注时长。</p></div><TimerReset :size="21" /></div><div class="focus-clock">{{ timerLabel }}</div><p class="focus-caption">{{ activeSession ? '正在记录当前项目专注时长' : selectedProject ? `当前项目：${selectedProject.name}` : '请先选择项目' }}</p><button class="run-button focus-button" @click="toggleTimer"><TimerReset :size="15" />{{ activeSession ? '结束计时' : '开始计时' }}</button><div class="focus-stats"><div><strong>{{ (stats.focusSeconds / 3600).toFixed(1) }}</strong><span>累计专注小时</span></div><div><strong>{{ checkin.streak }}</strong><span>连续签到天数</span></div><div><strong>{{ stats.completedTaskCount }}</strong><span>已完成任务</span></div></div></section>
         <section v-if="activeNav === '知识库'" class="page-view panel knowledge-page-view"><div class="page-view-head"><div><span class="panel-kicker">KNOWLEDGE BASE</span><h2>知识库</h2><p>保存常用开发资料和项目规范。</p></div><button class="new-project" @click="showComingSoon('知识库条目')"><Plus :size="16" />新建条目</button></div><div class="project-toolbar"><div class="project-search"><Search :size="14" /><input v-model="knowledgeQuery" placeholder="搜索标题、内容或标签" /></div></div><div v-if="filteredKnowledge.length === 0" class="task-empty">还没有知识库条目，先创建一条开发笔记。</div><div class="knowledge-grid"><article v-for="entry in filteredKnowledge" :key="entry.id"><FileCode2 :size="18" /><strong>{{ entry.title }}</strong><span>{{ entry.content || '暂无内容' }}</span><small v-if="entry.tags"># {{ entry.tags }}</small><div class="knowledge-actions"><button class="row-action" @click="editKnowledge(entry)">编辑</button><button class="row-action danger" @click="removeKnowledge(entry)">删除</button></div></article></div></section>
+        <section v-if="activeNav === '发布中心'" class="page-view panel deploy-page-view"><div class="page-view-head"><div><span class="panel-kicker">RELEASE CENTER</span><h2>发布中心</h2><p>{{ selectedProject ? `为「${selectedProject.name}」发布预览或生产版本。` : '请先在我的项目中选择项目。' }}</p></div><div class="deploy-controls"><select v-model="deployEnvironment" :disabled="!selectedProject"><option value="PREVIEW">预览环境</option><option value="PRODUCTION">生产环境</option></select><button class="new-project" :disabled="deployBusy || !selectedProject" @click="publishDeployment"><Rocket :size="16" />{{ deployBusy ? '发布中...' : '发布版本' }}</button></div></div><div v-if="!selectedProject" class="task-empty">选择项目后即可创建发布版本。</div><div v-else-if="deployments.length === 0" class="task-empty">暂无发布记录，先发布一个版本。</div><div v-else class="deploy-list"><div v-for="deployment in deployments" :key="deployment.id" class="deploy-row"><div class="deploy-status" :class="deployment.status.toLowerCase()"></div><div class="deploy-main"><div><strong>{{ deployment.version }}</strong><span class="deploy-env">{{ deployment.environment === 'PRODUCTION' ? '生产' : '预览' }}</span><span class="deploy-state">{{ deployment.status === 'PUBLISHED' ? '当前版本' : '历史版本' }}</span></div><small>{{ new Date(deployment.createdAt).toLocaleString('zh-CN') }}</small></div><a :href="deployment.previewUrl" target="_blank" rel="noreferrer">打开预览</a><button v-if="deployment.status !== 'PUBLISHED'" class="row-action" @click="rollbackDeployment(deployment)">回滚</button></div></div></section>
 
         <section v-if="activeNav === '总览'" class="workbench-grid">
           <article class="panel project-panel">
@@ -555,7 +583,7 @@ onUnmounted(() => { window.clearInterval(ticker); window.clearInterval(timerTick
             <div v-if="projects.length === 0" class="empty-model">还没有项目，先创建一个项目。</div>
           <div class="project-toolbar"><div class="project-search"><Search :size="14" /><input v-model="projectQuery" placeholder="搜索项目" /></div><select v-model="projectStatusFilter" aria-label="项目状态"><option value="ALL">全部状态</option><option value="IN_PROGRESS">进行中</option><option value="DONE">已完成</option></select></div>
           <div v-if="filteredProjects.length === 0" class="task-empty">没有匹配的项目。</div>
-          <button v-for="project in filteredProjects" :key="project.id" class="project-card" :class="{ 'featured-project': selectedProject?.id === project.id }" @click="selectedProject = project; loadTasks(project.id); loadProjectFiles(project.id); loadReviews(project.id)"><div class="project-icon" :class="{ muted: selectedProject?.id !== project.id }"><Rocket v-if="selectedProject?.id === project.id" :size="19" /><FolderKanban v-else :size="19" /></div><div class="project-info"><div class="project-title"><strong>{{ project.name }}</strong><span class="project-badge">{{ project.status === 'DONE' ? '已完成' : '进行中' }}</span></div><p>{{ project.description || project.techStack }}</p><div class="progress-line"><span :style="{ width: `${project.progress}%` }"></span></div><div class="project-meta"><span>{{ project.progress }}% 完成</span><span>{{ project.taskCount }} 个任务</span></div></div><ChevronRight :size="17" /></button>
+          <button v-for="project in filteredProjects" :key="project.id" class="project-card" :class="{ 'featured-project': selectedProject?.id === project.id }" @click="selectedProject = project; loadTasks(project.id); loadProjectFiles(project.id); loadReviews(project.id); loadDeployments(project.id)"><div class="project-icon" :class="{ muted: selectedProject?.id !== project.id }"><Rocket v-if="selectedProject?.id === project.id" :size="19" /><FolderKanban v-else :size="19" /></div><div class="project-info"><div class="project-title"><strong>{{ project.name }}</strong><span class="project-badge">{{ project.status === 'DONE' ? '已完成' : '进行中' }}</span></div><p>{{ project.description || project.techStack }}</p><div class="progress-line"><span :style="{ width: `${project.progress}%` }"></span></div><div class="project-meta"><span>{{ project.progress }}% 完成</span><span>{{ project.taskCount }} 个任务</span></div></div><ChevronRight :size="17" /></button>
             <button class="add-project" @click="createProject"><Plus :size="15" /> 创建一个新项目</button>
             <div v-if="selectedProject" class="project-actions"><button class="row-action" @click="editProject(selectedProject)">编辑项目</button><button class="row-action danger" @click="removeProject(selectedProject)">删除项目</button></div>
             <div v-if="selectedProject" class="task-list"><div class="task-list-head"><strong>{{ selectedProject.name }} · 任务</strong><div class="task-list-tools"><select :value="selectedProject.status" @change="updateProjectStatus($event.target.value)" aria-label="项目状态"><option value="IN_PROGRESS">进行中</option><option value="DONE">已完成</option></select><button class="text-button" @click="addTask"><Plus :size="14" /> 添加任务</button></div></div><div class="project-detail-meta"><span>{{ selectedProject.description || '暂无项目描述' }}</span><strong>{{ openReviewCount }} 个待处理问题</strong></div><div v-if="projectTasks.length === 0" class="task-empty">还没有任务。</div><div v-for="task in projectTasks" :key="task.id" class="task-row" @click="cycleTaskStatus(task)"><span class="task-check" :class="{ done: task.status === 'DONE', active: task.status === 'IN_PROGRESS' }"><Check v-if="task.status === 'DONE'" :size="12" /></span><span @dblclick.stop="editTask(task)">{{ task.title }}</span><small>{{ task.status === 'DONE' ? '已完成' : task.status === 'IN_PROGRESS' ? '进行中' : '待办' }}</small><button class="task-action" @click.stop="editTask(task)">编辑</button><button class="task-action danger" @click.stop="removeTask(task)">删除</button></div></div>

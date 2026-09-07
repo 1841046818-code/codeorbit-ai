@@ -161,3 +161,17 @@ CREATE TABLE IF NOT EXISTS notifications (
   INDEX idx_notification_user_read (user_id, read_at),
   INDEX idx_notification_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS deployments (
+  id VARCHAR(36) PRIMARY KEY,
+  project_id VARCHAR(36) NOT NULL,
+  user_id VARCHAR(36) NOT NULL,
+  environment VARCHAR(30) NOT NULL DEFAULT 'PREVIEW',
+  version VARCHAR(40) NOT NULL,
+  status VARCHAR(30) NOT NULL DEFAULT 'PUBLISHED',
+  preview_url VARCHAR(500) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_deployment_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  CONSTRAINT fk_deployment_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_deployment_project_created (project_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

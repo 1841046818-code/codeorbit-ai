@@ -373,6 +373,44 @@ public class CodeOrbitApplication {
             return Map.of("message", "任务已删除");
         }
 
+        @GetMapping("/{projectId}/deployments")
+        public Map<String, Object> deployments(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String projectId) {
+            UserView user = requireUser(authorization);
+            requireProjectMember(user.id(), projectId);
+            List<DeploymentView> deployments = jdbc.query("SELECT id, project_id, environment, version, status, preview_url, created_at FROM deployments WHERE project_id = ? ORDER BY created_at DESC", (result, row) -> new DeploymentView(result.getString("id"), result.getString("project_id"), result.getString("environment"), result.getString("version"), result.getString("status"), result.getString("preview_url"), result.getTimestamp("created_at").toInstant().toString()), projectId);
+            return Map.of("deployments", deployments);
+        }
+
+        @PostMapping("/{projectId}/deployments")
+        public Map<String, Object> publish(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String projectId, @RequestBody DeploymentRequest input) {
+            UserView user = requireUser(authorization);
+            requireProjectMember(user.id(), projectId);
+            String environment = normalizeEnvironment(input.environment());
+            int next = jdbc.queryForObject("SELECT COUNT(*) FROM deployments WHERE project_id = ?", Integer.class, projectId) + 1;
+            String version = "v1." + next;
+            String id = UUID.randomUUID().toString();
+            String previewUrl = "http://127.0.0.1:4173/workspace?projectId=" + projectId + "&deploymentId=" + id;
+            jdbc.update("UPDATE deployments SET status = 'ARCHIVED' WHERE project_id = ? AND environment = ? AND status = 'PUBLISHED'", projectId, environment);
+            jdbc.update("INSERT INTO deployments (id, project_id, user_id, environment, version, status, preview_url) VALUES (?, ?, ?, ?, ?, 'PUBLISHED', ?)", id, projectId, user.id(), environment, version, previewUrl);
+            jdbc.update("INSERT INTO notifications (id, user_id, type, title, content) VALUES (?, ?, 'RELEASE', ?, ?)", UUID.randomUUID().toString(), user.id(), "发布完成", "项目已发布 " + version + "（" + ("PRODUCTION".equals(environment) ? "生产" : "预览") + "环境）");
+            DeploymentView deployment = jdbc.queryForObject("SELECT id, project_id, environment, version, status, preview_url, created_at FROM deployments WHERE id = ?", (result, row) -> new DeploymentView(result.getString("id"), result.getString("project_id"), result.getString("environment"), result.getString("version"), result.getString("status"), result.getString("preview_url"), result.getTimestamp("created_at").toInstant().toString()), id);
+            return Map.of("message", "发布成功", "deployment", deployment);
+        }
+
+        @PostMapping("/{projectId}/deployments/{deploymentId}/rollback")
+        public Map<String, Object> rollback(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String projectId, @PathVariable String deploymentId) {
+            UserView user = requireUser(authorization);
+            requireProjectMember(user.id(), projectId);
+            String environment = jdbc.queryForObject("SELECT environment FROM deployments WHERE id = ? AND project_id = ?", String.class, deploymentId, projectId);
+            jdbc.update("UPDATE deployments SET status = 'ARCHIVED' WHERE project_id = ? AND environment = ? AND status = 'PUBLISHED'", projectId, environment);
+            jdbc.update("UPDATE deployments SET status = 'PUBLISHED' WHERE id = ? AND project_id = ?", deploymentId, projectId);
+            return Map.of("message", "已回滚到 " + deploymentId);
+        }
+
+        private static String normalizeEnvironment(String value) {
+            return "PRODUCTION".equalsIgnoreCase(value) ? "PRODUCTION" : "PREVIEW";
+        }
+
         private boolean isMember(String userId, String workspaceId) {
             return !jdbc.queryForList("SELECT workspace_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?", String.class, workspaceId, userId).isEmpty();
         }
@@ -725,6 +763,8 @@ public class CodeOrbitApplication {
     record ProjectFileView(String path, String content, String updatedAt) {}
     record TaskStatusRequest(String status) {}
     record CheckinRequest(String workspaceId) {}
+    record DeploymentRequest(String environment) {}
+    record DeploymentView(String id, String projectId, String environment, String version, String status, String previewUrl, String createdAt) {}
     record KnowledgeRequest(String workspaceId, String title, String content, String tags) {}
     record KnowledgeView(String id, String workspaceId, String title, String content, String tags, String createdAt, String updatedAt) {}
     record NotificationView(String id, String type, String title, String content, String readAt, String createdAt) {}

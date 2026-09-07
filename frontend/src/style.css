@@ -184,8 +184,23 @@ body { background: #050812; }
 .knowledge-grid article span { color: #7894ad; font-size: 10px; line-height: 1.6; }
 .knowledge-grid article small { color: #65c5ff; font-size: 9px; }
 .knowledge-actions { display: flex; gap: 7px; margin-top: auto; }
+.deploy-page-view { min-height: 520px; }
+.deploy-controls { display: flex; align-items: center; gap: 8px; }
+.deploy-controls select { padding: 9px 10px; border: 1px solid rgba(96,154,230,.2); border-radius: 6px; color: #a9c6e2; background: rgba(5,14,29,.72); font-size: 10px; }
+.deploy-list { border-top: 1px solid rgba(145,196,220,.12); }
+.deploy-row { display: flex; align-items: center; gap: 12px; padding: 15px 0; border-bottom: 1px solid rgba(145,196,220,.1); }
+.deploy-status { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; background: #6e8298; }
+.deploy-status.published { background: #62c5ff; box-shadow: 0 0 9px rgba(98,197,255,.65); }
+.deploy-main { min-width: 0; flex: 1; }
+.deploy-main strong { color: #dceeff; font: 13px 'DM Mono', monospace; }
+.deploy-main small { display: block; margin-top: 5px; color: #7894ad; font-size: 9px; }
+.deploy-env, .deploy-state { margin-left: 9px; padding: 3px 6px; border-radius: 4px; color: #72c7ff; background: rgba(91,188,255,.1); font-size: 9px; }
+.deploy-state { color: #82d9b7; background: rgba(98,197,255,.08); }
+.deploy-row > a { color: #72c7ff; font-size: 9px; text-decoration: none; white-space: nowrap; }
+.deploy-row > a:hover { text-decoration: underline; }
 @media (max-width: 700px) { .growth-grid { grid-template-columns: repeat(2, 1fr); } .checkin-calendar { grid-template-columns: repeat(10, 1fr); } }
 @media (max-width: 760px) { .project-page-grid, .knowledge-grid { grid-template-columns: 1fr; } .page-view { padding: 17px; } .page-view-head { display: block; } .page-view-head .new-project, .page-view-head .model-chip { margin-top: 14px; } .project-detail-stats { flex-wrap: wrap; gap: 12px; } .result-head { display: block; } .result-head span { display: block; margin-top: 6px; } .focus-stats { grid-template-columns: 1fr; padding-top: 32px; } }
+@media (max-width: 760px) { .deploy-controls { display: flex; margin-top: 14px; } .deploy-row { flex-wrap: wrap; } .deploy-main { flex-basis: calc(100% - 25px); } .deploy-row > a { margin-left: 21px; } }
 
 /* Give the editor the primary workspace on desktop. */
 @media (min-width: 1261px) {
