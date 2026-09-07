@@ -20,8 +20,12 @@ npm run dev
 
 ## 启动后端
 
+在 IntelliJ IDEA 中打开 `backend` 目录，运行 `com.codeorbit.CodeOrbitApplication`。运行配置需要使用 JDK 22，并设置环境变量 `CODEORBIT_DB_PASSWORD=200400`。如果提示 `8080` 端口被占用，说明后端已经启动，直接访问健康检查即可，或先停止旧的 Java 进程。
+
 ```powershell
 cd D:\毕设\codeorbit-ai\backend
+$env:JAVA_HOME='C:\Java\jdk-22'
+$env:CODEORBIT_DB_PASSWORD='200400'
 mvn spring-boot:run
 ```
 
