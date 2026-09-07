@@ -146,3 +146,18 @@ CREATE TABLE IF NOT EXISTS knowledge_entries (
   INDEX idx_knowledge_workspace (workspace_id),
   INDEX idx_knowledge_owner (owner_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id VARCHAR(36) PRIMARY KEY,
+  user_id VARCHAR(36) NOT NULL,
+  workspace_id VARCHAR(36) NULL,
+  type VARCHAR(40) NOT NULL DEFAULT 'INFO',
+  title VARCHAR(180) NOT NULL,
+  content VARCHAR(500) NOT NULL DEFAULT '',
+  read_at TIMESTAMP NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_notification_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_notification_workspace FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE,
+  INDEX idx_notification_user_read (user_id, read_at),
+  INDEX idx_notification_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

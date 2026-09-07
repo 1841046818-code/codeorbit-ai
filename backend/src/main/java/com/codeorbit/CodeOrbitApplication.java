@@ -156,6 +156,7 @@ public class CodeOrbitApplication {
             if (jdbc.queryForObject("SELECT COUNT(*) FROM workspace_members WHERE workspace_id = ? AND user_id = ?", Integer.class, workspaceId, target.id()) > 0) return Map.of("message", "该用户已经是工作空间成员");
             String role = normalizeRole(input.role());
             jdbc.update("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)", workspaceId, target.id(), role);
+            jdbc.update("INSERT INTO notifications (id, user_id, workspace_id, type, title, content) VALUES (?, ?, ?, 'TEAM', ?, ?)", UUID.randomUUID().toString(), target.id(), workspaceId, "加入工作空间", owner.name() + " 邀请你加入「" + workspaceName(workspaceId) + "」");
             return Map.of("message", "成员已加入", "member", new MemberView(target.id(), target.name(), target.email(), role, Instant.now().toString()), "operator", owner.email());
         }
 
@@ -186,6 +187,10 @@ public class CodeOrbitApplication {
 
         private void requireMembership(String userId, String workspaceId) {
             if (workspaceId == null || jdbc.queryForObject("SELECT COUNT(*) FROM workspace_members WHERE workspace_id = ? AND user_id = ?", Integer.class, workspaceId, userId) == 0) throw new IllegalArgumentException("工作空间不存在或无权访问");
+        }
+
+        private String workspaceName(String workspaceId) {
+            return jdbc.queryForObject("SELECT name FROM workspaces WHERE id = ?", String.class, workspaceId);
         }
 
         private static String normalizeRole(String role) {
@@ -541,6 +546,37 @@ public class CodeOrbitApplication {
         private static String clean(String value) { return value == null ? "" : value.trim(); }
     }
 
+    @RestController
+    @RequestMapping("/api/notifications")
+    @CrossOrigin(origins = "*")
+    static class NotificationController {
+        private final JdbcTemplate jdbc;
+        NotificationController(JdbcTemplate jdbc) { this.jdbc = jdbc; }
+
+        @GetMapping
+        public Map<String, Object> list(@RequestHeader(value = "Authorization", required = false) String authorization, @RequestParam(defaultValue = "30") int limit) {
+            UserView user = requireUser(authorization);
+            int safeLimit = Math.min(Math.max(limit, 1), 100);
+            List<NotificationView> notifications = jdbc.query("SELECT id, type, title, content, read_at, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT " + safeLimit, (result, row) -> new NotificationView(result.getString("id"), result.getString("type"), result.getString("title"), result.getString("content"), result.getTimestamp("read_at") == null ? null : result.getTimestamp("read_at").toInstant().toString(), result.getTimestamp("created_at").toInstant().toString()), user.id());
+            long unread = notifications.stream().filter(item -> item.readAt() == null).count();
+            return Map.of("notifications", notifications, "unreadCount", unread);
+        }
+
+        @PostMapping("/{notificationId}/read")
+        public Map<String, Object> read(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String notificationId) {
+            UserView user = requireUser(authorization);
+            jdbc.update("UPDATE notifications SET read_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?", notificationId, user.id());
+            return Map.of("message", "通知已读");
+        }
+
+        @PostMapping("/read-all")
+        public Map<String, Object> readAll(@RequestHeader(value = "Authorization", required = false) String authorization) {
+            UserView user = requireUser(authorization);
+            jdbc.update("UPDATE notifications SET read_at = CURRENT_TIMESTAMP WHERE user_id = ? AND read_at IS NULL", user.id());
+            return Map.of("message", "通知已全部读");
+        }
+    }
+
     private static UserView requireUser(String authorization) {
         UserView user = findUser(token(authorization));
         if (user == null) throw new IllegalArgumentException("登录已过期");
@@ -691,6 +727,7 @@ public class CodeOrbitApplication {
     record CheckinRequest(String workspaceId) {}
     record KnowledgeRequest(String workspaceId, String title, String content, String tags) {}
     record KnowledgeView(String id, String workspaceId, String title, String content, String tags, String createdAt, String updatedAt) {}
+    record NotificationView(String id, String type, String title, String content, String readAt, String createdAt) {}
 
     record HealthResponse(String status, String message, String stage) {}
 }

@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   Activity,
+  Bell,
   Bot,
   Check,
   ChevronRight,
@@ -59,6 +60,9 @@ const knowledgeQuery = ref('')
 const workspaceMembers = ref([])
 const showMembers = ref(false)
 const memberBusy = ref(false)
+const notifications = ref([])
+const unreadNotifications = ref(0)
+const notificationOpen = ref(false)
 let timerTicker
 let fileSaveTimer
 
@@ -238,6 +242,21 @@ async function loadMembers() {
     const response = await fetch(`${API_BASE}/api/workspaces/${activeWorkspace.value.id}/members`, { headers: { Authorization: `Bearer ${getToken()}` } })
     if (response.ok) { const data = await response.json(); workspaceMembers.value = data.members || [] }
   } catch { workspaceMembers.value = [] }
+}
+async function loadNotifications() {
+  try {
+    const response = await fetch(`${API_BASE}/api/notifications`, { headers: { Authorization: `Bearer ${getToken()}` } })
+    if (response.ok) { const data = await response.json(); notifications.value = data.notifications || []; unreadNotifications.value = data.unreadCount || 0 }
+  } catch { notifications.value = []; unreadNotifications.value = 0 }
+}
+async function markNotificationRead(notification) {
+  if (notification.readAt) return
+  const response = await fetch(`${API_BASE}/api/notifications/${notification.id}/read`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` } })
+  if (response.ok) { notification.readAt = new Date().toISOString(); unreadNotifications.value = Math.max(0, unreadNotifications.value - 1) }
+}
+async function markAllNotificationsRead() {
+  const response = await fetch(`${API_BASE}/api/notifications/read-all`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` } })
+  if (response.ok) { notifications.value.forEach(item => { item.readAt = item.readAt || new Date().toISOString() }); unreadNotifications.value = 0 }
 }
 async function openMembers() { showMembers.value = true; await loadMembers() }
 async function inviteMember() {
@@ -443,6 +462,7 @@ onMounted(() => {
   loadModelConfigs()
   loadWorkspaces()
   loadActiveSession()
+  loadNotifications()
 })
 
 onUnmounted(() => { window.clearInterval(ticker); window.clearInterval(timerTicker) })
@@ -487,7 +507,7 @@ onUnmounted(() => { window.clearInterval(ticker); window.clearInterval(timerTick
     <main class="main-area">
       <header class="topbar">
         <div class="breadcrumb"><span>工作台</span><ChevronRight :size="14" /><strong>{{ activeNav }}</strong></div>
-        <div class="top-actions"><div class="live-status"><span class="status-dot"></span>系统运行正常</div><button class="icon-button" title="搜索" @click="showComingSoon('搜索')"><Search :size="17" /></button><button class="icon-button" title="帮助" @click="showComingSoon('帮助')"><CircleHelp :size="17" /></button><button class="new-project" @click="createProject"><Plus :size="16" />新建项目</button></div>
+        <div class="top-actions"><div class="live-status"><span class="status-dot"></span>系统运行正常</div><button class="icon-button notification-button" title="通知中心" @click="notificationOpen = !notificationOpen; loadNotifications()"><Bell :size="17" /><span v-if="unreadNotifications" class="notification-count">{{ unreadNotifications > 9 ? '9+' : unreadNotifications }}</span></button><button class="icon-button" title="搜索" @click="showComingSoon('搜索')"><Search :size="17" /></button><button class="icon-button" title="帮助" @click="showComingSoon('帮助')"><CircleHelp :size="17" /></button><button class="new-project" @click="createProject"><Plus :size="16" />新建项目</button></div>
       </header>
 
       <section class="content-wrap">
@@ -550,6 +570,7 @@ onUnmounted(() => { window.clearInterval(ticker); window.clearInterval(timerTick
         </section>
       </section>
     </main>
+    <aside v-if="notificationOpen" class="notification-panel"><div class="notification-head"><div><strong>通知中心</strong><span>{{ unreadNotifications }} 条未读</span></div><button class="text-button" :disabled="!unreadNotifications" @click="markAllNotificationsRead">全部已读</button></div><div v-if="notifications.length === 0" class="task-empty">暂时没有通知。</div><button v-for="notification in notifications" :key="notification.id" class="notification-item" :class="{ unread: !notification.readAt }" @click="markNotificationRead(notification)"><span class="notification-type">{{ notification.type === 'TEAM' ? '团队' : '通知' }}</span><span><strong>{{ notification.title }}</strong><small>{{ notification.content }}</small></span></button></aside>
     <div v-if="showMembers" class="modal-backdrop" @click.self="showMembers = false"><section class="model-modal members-modal"><div class="modal-head"><div><span class="panel-kicker">WORKSPACE TEAM</span><h2>团队成员</h2><p>{{ activeWorkspace.name }} · 只有所有者可以管理成员</p></div><button class="icon-button" title="关闭" @click="showMembers = false">×</button></div><div class="members-toolbar"><span>{{ workspaceMembers.length }} 位成员</span><button class="new-project" :disabled="memberBusy" @click="inviteMember"><Plus :size="15" />邀请成员</button></div><div class="model-list"><div v-for="member in workspaceMembers" :key="member.id" class="member-row"><div class="avatar small-avatar">{{ member.name.slice(0, 1) }}</div><div class="model-main"><strong>{{ member.name }}</strong><small>{{ member.email }}</small></div><span class="member-role">{{ member.role }}</span><button v-if="member.role !== 'OWNER'" class="row-action" @click="changeMemberRole(member)">改角色</button><button v-if="member.role !== 'OWNER'" class="row-action danger" @click="removeMember(member)">移除</button></div><div v-if="workspaceMembers.length === 0" class="empty-model">暂无成员数据。</div></div></section></div>
     <div v-if="showModelCenter" class="modal-backdrop" @click.self="showModelCenter = false"><section class="model-modal"><div class="modal-head"><div><span class="panel-kicker">MODEL SWITCHBOARD</span><h2>自定义模型中心</h2><p>兼容 OpenAI API，可接本地模型、云端模型或第三方中转站。</p></div><button class="icon-button" title="关闭" @click="showModelCenter = false">×</button></div><div class="model-list"><div v-for="config in modelConfigs" :key="config.id" class="model-row" :class="{ active: config.active }"><div class="model-status"><span></span></div><div class="model-main"><strong>{{ config.name }}</strong><small>{{ config.model }} · {{ config.baseUrl }}</small></div><span v-if="config.active" class="active-label">当前使用</span><span v-if="modelTest[config.id]" class="test-label">{{ modelTest[config.id] }}</span><button class="row-action" @click="editModel(config)">编辑</button><button class="row-action" @click="testModel(config.id)">测试</button><button v-if="!config.active" class="row-action primary" @click="activateModel(config.id)">使用</button><button class="row-action danger" @click="removeModel(config.id)">删除</button></div><div v-if="modelConfigs.length === 0" class="empty-model">还没有模型配置，请在下方添加。</div></div><div class="model-form"><div class="form-title">添加或编辑模型</div><div class="form-grid"><label>配置名称<input v-model="modelForm.name" placeholder="例如：我的 DeepSeek 中转" /></label><label>模型名称<input v-model="modelForm.model" placeholder="例如：deepseek-chat" /></label><label class="wide">接口地址<input v-model="modelForm.baseUrl" placeholder="例如：http://127.0.0.1:11434/v1" /></label><label class="wide">API Key <span class="optional">可选，本地 Ollama 不需要</span><input v-model="modelForm.apiKey" type="password" placeholder="留空以保留当前 Key" /></label></div><div class="form-actions"><button class="row-action" @click="resetModelForm">清空</button><button class="generate-button save-model" :disabled="modelBusy" @click="saveModel">{{ modelBusy ? '保存中...' : '保存配置' }}</button></div></div></section></div>
     <transition name="toast"><div v-if="toast" class="toast-message"><Sparkles :size="16" />{{ toast }}</div></transition>
