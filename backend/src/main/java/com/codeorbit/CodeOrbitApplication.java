@@ -109,20 +109,25 @@ public class CodeOrbitApplication {
     static class WorkspaceController {
         private final JdbcTemplate jdbc;
 
-        WorkspaceController(JdbcTemplate jdbc) { this.jdbc = jdbc; }
+        WorkspaceController(JdbcTemplate jdbc) {
+            this.jdbc = jdbc;
+            try { jdbc.execute("ALTER TABLE workspaces ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE'"); }
+            catch (Exception ignored) { /* Existing databases already have the migration. */ }
+        }
 
         @GetMapping
         public Map<String, Object> list(@RequestHeader(value = "Authorization", required = false) String authorization) {
             UserView user = findUser(token(authorization));
             if (user == null) return Map.of("message", "登录已过期");
-            List<WorkspaceView> workspaces = jdbc.query("SELECT w.id, w.name, w.description, wm.role FROM workspaces w JOIN workspace_members wm ON wm.workspace_id = w.id WHERE wm.user_id = ? ORDER BY w.created_at", (result, row) -> new WorkspaceView(result.getString("id"), result.getString("name"), result.getString("description"), result.getString("role")), user.id());
+            List<WorkspaceView> workspaces = jdbc.query("SELECT w.id, w.name, w.description, wm.role, w.status FROM workspaces w JOIN workspace_members wm ON wm.workspace_id = w.id WHERE wm.user_id = ? ORDER BY w.created_at", (result, row) -> new WorkspaceView(result.getString("id"), result.getString("name"), result.getString("description"), result.getString("role"), result.getString("status")), user.id());
             if (workspaces.isEmpty()) {
                 String id = UUID.randomUUID().toString();
                 jdbc.update("INSERT INTO workspaces (id, name, description, owner_id) VALUES (?, ?, ?, ?)", id, "个人开发空间", "个人工作区", user.id());
                 jdbc.update("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)", id, user.id(), "OWNER");
-                workspaces = List.of(new WorkspaceView(id, "个人开发空间", "个人工作区", "OWNER"));
+                workspaces = List.of(new WorkspaceView(id, "个人开发空间", "个人工作区", "OWNER", "ACTIVE"));
             }
-            return Map.of("active", workspaces.getFirst(), "workspaces", workspaces);
+            WorkspaceView active = workspaces.stream().filter(item -> "ACTIVE".equals(item.status())).findFirst().orElse(workspaces.getFirst());
+            return Map.of("active", active, "workspaces", workspaces);
         }
 
         @PostMapping
@@ -134,7 +139,36 @@ public class CodeOrbitApplication {
             String id = UUID.randomUUID().toString();
             jdbc.update("INSERT INTO workspaces (id, name, description, owner_id) VALUES (?, ?, ?, ?)", id, name, input.description() == null ? "" : input.description().trim(), user.id());
             jdbc.update("INSERT INTO workspace_members (workspace_id, user_id, role) VALUES (?, ?, ?)", id, user.id(), "OWNER");
-            return Map.of("workspace", new WorkspaceView(id, name, input.description() == null ? "" : input.description().trim(), "OWNER"));
+            return Map.of("workspace", new WorkspaceView(id, name, input.description() == null ? "" : input.description().trim(), "OWNER", "ACTIVE"));
+        }
+
+        @PutMapping("/{workspaceId}")
+        public Map<String, Object> update(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String workspaceId, @RequestBody WorkspaceRequest input) {
+            UserView owner = requireOwner(authorization, workspaceId);
+            String name = input.name() == null ? "" : input.name().trim();
+            if (name.isBlank()) return Map.of("message", "请输入工作空间名称");
+            String description = input.description() == null ? "" : input.description().trim();
+            int changed = jdbc.update("UPDATE workspaces SET name = ?, description = ? WHERE id = ? AND owner_id = ? AND status = 'ACTIVE'", name, description, workspaceId, owner.id());
+            if (changed == 0) return Map.of("message", "工作空间不存在或已归档");
+            return Map.of("message", "工作空间已更新", "workspace", new WorkspaceView(workspaceId, name, description, "OWNER", "ACTIVE"));
+        }
+
+        @PostMapping("/{workspaceId}/archive")
+        public Map<String, Object> archive(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String workspaceId) {
+            UserView owner = requireOwner(authorization, workspaceId);
+            Integer activeCount = jdbc.queryForObject("SELECT COUNT(*) FROM workspaces w JOIN workspace_members wm ON wm.workspace_id = w.id WHERE wm.user_id = ? AND w.status = 'ACTIVE'", Integer.class, owner.id());
+            if (activeCount != null && activeCount <= 1) return Map.of("message", "至少保留一个活动工作空间");
+            int changed = jdbc.update("UPDATE workspaces SET status = 'ARCHIVED' WHERE id = ? AND owner_id = ? AND status = 'ACTIVE'", workspaceId, owner.id());
+            if (changed == 0) return Map.of("message", "工作空间不存在或已经归档");
+            return Map.of("message", "工作空间已归档");
+        }
+
+        @PostMapping("/{workspaceId}/restore")
+        public Map<String, Object> restore(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String workspaceId) {
+            UserView owner = requireOwner(authorization, workspaceId);
+            int changed = jdbc.update("UPDATE workspaces SET status = 'ACTIVE' WHERE id = ? AND owner_id = ? AND status = 'ARCHIVED'", workspaceId, owner.id());
+            if (changed == 0) return Map.of("message", "工作空间不存在或已经恢复");
+            return Map.of("message", "工作空间已恢复");
         }
 
         @GetMapping("/{workspaceId}/members")
@@ -748,7 +782,7 @@ public class CodeOrbitApplication {
     record StoredUser(String id, String name, String email, String passwordHash) {}
     record UserView(String id, String name, String email) {}
     record WorkspaceRequest(String name, String description) {}
-    record WorkspaceView(String id, String name, String description, String role) {}
+    record WorkspaceView(String id, String name, String description, String role, String status) {}
     record MemberRequest(String email, String role) {}
     record MemberView(String id, String name, String email, String role, String joinedAt) {}
     record ProjectRequest(String workspaceId, String name, String description, String techStack) {}

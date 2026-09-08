@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   Activity,
+  Archive,
   Bell,
   Bot,
   Check,
@@ -15,8 +16,10 @@ import {
   GitBranch,
   LayoutDashboard,
   Play,
+  Pencil,
   Plus,
   Rocket,
+  RotateCcw,
   Search,
   Settings2,
   Sparkles,
@@ -45,6 +48,10 @@ const currentUser = ref(getCurrentUser() || { name: '开发者', email: '' })
 const workspaces = ref([])
 const activeWorkspace = ref({ name: '个人开发空间', description: '个人工作区' })
 const workspaceOpen = ref(false)
+const showWorkspaceCenter = ref(false)
+const workspaceMode = ref('manage')
+const workspaceForm = ref({ id: '', name: '', description: '' })
+const workspaceBusy = ref(false)
 const projects = ref([])
 const selectedProject = ref(null)
 const projectTasks = ref([])
@@ -98,6 +105,8 @@ const filteredProjects = computed(() => projects.value.filter(project => {
 }))
 const openReviewCount = computed(() => reviewIssues.value.filter(issue => issue.status === 'OPEN').length)
 const filteredKnowledge = computed(() => knowledgeEntries.value.filter(entry => `${entry.title} ${entry.content} ${entry.tags}`.toLowerCase().includes(knowledgeQuery.value.trim().toLowerCase())))
+const activeWorkspaces = computed(() => workspaces.value.filter(workspace => workspace.status !== 'ARCHIVED'))
+const archivedWorkspaces = computed(() => workspaces.value.filter(workspace => workspace.status === 'ARCHIVED'))
 
 const issues = [
   { level: '高风险', title: '按钮事件缺少异常处理', file: 'script.js:1', tone: 'danger' },
@@ -214,13 +223,22 @@ async function generateCode() {
 async function loadModelConfigs() {
   try { const response = await fetch(`${API_BASE}/api/ai/config`); if (!response.ok) return; const data = await response.json(); modelConfigs.value = data.configs || []; } catch { /* 后端未启动时保持本地界面可用 */ }
 }
+function workspacePreferenceKey() {
+  return `codeorbit_active_workspace:${currentUser.value.id || currentUser.value.email || 'guest'}`
+}
+function rememberWorkspace(workspaceId) {
+  if (workspaceId) localStorage.setItem(workspacePreferenceKey(), workspaceId)
+}
 async function loadWorkspaces() {
   try {
     const response = await fetch(`${API_BASE}/api/workspaces`, { headers: { Authorization: `Bearer ${getToken()}` } })
     if (!response.ok) return
     const data = await response.json()
     workspaces.value = data.workspaces || []
-    activeWorkspace.value = data.active || activeWorkspace.value
+    const savedId = localStorage.getItem(workspacePreferenceKey())
+    const savedWorkspace = workspaces.value.find(workspace => workspace.id === savedId && workspace.status !== 'ARCHIVED')
+    activeWorkspace.value = savedWorkspace || data.active || activeWorkspace.value
+    rememberWorkspace(activeWorkspace.value.id)
     await loadProjects()
     await loadStats()
     await loadCheckin()
@@ -229,8 +247,9 @@ async function loadWorkspaces() {
 }
 async function switchWorkspace(workspace) {
   workspaceOpen.value = false
-  if (!workspace || workspace.id === activeWorkspace.value.id) return
+  if (!workspace || workspace.status === 'ARCHIVED' || workspace.id === activeWorkspace.value.id) return
   activeWorkspace.value = workspace
+  rememberWorkspace(workspace.id)
   projects.value = []
   selectedProject.value = null
   projectTasks.value = []
@@ -239,6 +258,68 @@ async function switchWorkspace(workspace) {
   await loadCheckin()
   await loadKnowledge()
   if (showMembers.value) await loadMembers()
+}
+function openWorkspaceCreate() {
+  workspaceOpen.value = false
+  workspaceMode.value = 'create'
+  workspaceForm.value = { id: '', name: '', description: '' }
+  showWorkspaceCenter.value = true
+}
+function openWorkspaceManage() {
+  workspaceOpen.value = false
+  workspaceMode.value = 'manage'
+  workspaceForm.value = { id: activeWorkspace.value.id || '', name: activeWorkspace.value.name || '', description: activeWorkspace.value.description || '' }
+  showWorkspaceCenter.value = true
+}
+function editWorkspace(workspace) {
+  workspaceMode.value = 'manage'
+  workspaceForm.value = { id: workspace.id, name: workspace.name, description: workspace.description || '' }
+}
+async function saveWorkspace() {
+  const name = workspaceForm.value.name.trim()
+  if (!name) { toast.value = '请输入工作空间名称。'; return }
+  workspaceBusy.value = true
+  try {
+    const isCreate = workspaceMode.value === 'create'
+    const endpoint = isCreate ? `${API_BASE}/api/workspaces` : `${API_BASE}/api/workspaces/${workspaceForm.value.id}`
+    const response = await fetch(endpoint, { method: isCreate ? 'POST' : 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` }, body: JSON.stringify({ name, description: workspaceForm.value.description.trim() }) })
+    const data = await response.json()
+    if (!response.ok || !data.workspace) throw new Error(data.message || '保存失败')
+    const workspace = data.workspace
+    const existingIndex = workspaces.value.findIndex(item => item.id === workspace.id)
+    if (existingIndex >= 0) workspaces.value.splice(existingIndex, 1, workspace)
+    else workspaces.value.unshift(workspace)
+    activeWorkspace.value = workspace
+    rememberWorkspace(workspace.id)
+    showWorkspaceCenter.value = false
+    await loadProjects()
+    await loadStats()
+    await loadCheckin()
+    await loadKnowledge()
+    toast.value = isCreate ? '工作空间已创建。' : '工作空间已更新。'
+  } catch (error) { toast.value = error.message || '工作空间保存失败。' } finally { workspaceBusy.value = false }
+}
+async function archiveWorkspace(workspace) {
+  if (!workspace?.id || !window.confirm(`归档“${workspace.name}”？归档后其中的数据会保留，但不会出现在活动工作空间中。`)) return
+  workspaceBusy.value = true
+  try {
+    const response = await fetch(`${API_BASE}/api/workspaces/${workspace.id}/archive`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` } })
+    const data = await response.json()
+    if (!response.ok || data.message !== '工作空间已归档') throw new Error(data.message || '归档失败')
+    showWorkspaceCenter.value = false
+    await loadWorkspaces()
+    toast.value = '工作空间已归档。'
+  } catch (error) { toast.value = error.message || '工作空间归档失败。' } finally { workspaceBusy.value = false }
+}
+async function restoreWorkspace(workspace) {
+  workspaceBusy.value = true
+  try {
+    const response = await fetch(`${API_BASE}/api/workspaces/${workspace.id}/restore`, { method: 'POST', headers: { Authorization: `Bearer ${getToken()}` } })
+    const data = await response.json()
+    if (!response.ok || data.message !== '工作空间已恢复') throw new Error(data.message || '恢复失败')
+    await loadWorkspaces()
+    toast.value = '工作空间已恢复。'
+  } catch (error) { toast.value = error.message || '工作空间恢复失败。' } finally { workspaceBusy.value = false }
 }
 async function loadMembers() {
   if (!activeWorkspace.value.id) return
@@ -514,7 +595,12 @@ onUnmounted(() => { window.clearInterval(ticker); window.clearInterval(timerTick
         <div class="workspace-copy"><span>{{ activeWorkspace.name }}</span><small>{{ activeWorkspace.description || '工作空间' }}</small></div>
         <ChevronRight :size="16" />
       </button>
-      <div v-if="workspaceOpen" class="workspace-menu"><button v-for="workspace in workspaces" :key="workspace.id" :class="{ selected: workspace.id === activeWorkspace.id }" @click="switchWorkspace(workspace)"><Code2 :size="14" /><span>{{ workspace.name }}</span><Check v-if="workspace.id === activeWorkspace.id" :size="14" /></button></div>
+      <div v-if="workspaceOpen" class="workspace-menu">
+        <button v-for="workspace in activeWorkspaces" :key="workspace.id" :class="{ selected: workspace.id === activeWorkspace.id }" @click="switchWorkspace(workspace)"><Code2 :size="14" /><span>{{ workspace.name }}</span><Check v-if="workspace.id === activeWorkspace.id" :size="14" /></button>
+        <div class="workspace-menu-divider" />
+        <button class="workspace-menu-action" @click="openWorkspaceCreate"><Plus :size="14" /><span>新建工作空间</span></button>
+        <button class="workspace-menu-action" @click="openWorkspaceManage"><Settings2 :size="14" /><span>管理工作空间</span></button>
+      </div>
       <button class="members-button" @click="openMembers"><Users :size="15" /><span>团队成员</span></button>
       <div class="nav-group-label">工作台</div>
       <nav>
@@ -599,6 +685,7 @@ onUnmounted(() => { window.clearInterval(ticker); window.clearInterval(timerTick
       </section>
     </main>
     <aside v-if="notificationOpen" class="notification-panel"><div class="notification-head"><div><strong>通知中心</strong><span>{{ unreadNotifications }} 条未读</span></div><button class="text-button" :disabled="!unreadNotifications" @click="markAllNotificationsRead">全部已读</button></div><div v-if="notifications.length === 0" class="task-empty">暂时没有通知。</div><button v-for="notification in notifications" :key="notification.id" class="notification-item" :class="{ unread: !notification.readAt }" @click="markNotificationRead(notification)"><span class="notification-type">{{ notification.type === 'TEAM' ? '团队' : '通知' }}</span><span><strong>{{ notification.title }}</strong><small>{{ notification.content }}</small></span></button></aside>
+    <div v-if="showWorkspaceCenter" class="modal-backdrop" @click.self="showWorkspaceCenter = false"><section class="model-modal workspace-modal"><div class="modal-head"><div><span class="panel-kicker">WORKSPACE SETTINGS</span><h2>{{ workspaceMode === 'create' ? '新建工作空间' : '管理工作空间' }}</h2><p>工作空间用于隔离项目、任务、统计和团队成员。</p></div><button class="icon-button" title="关闭" @click="showWorkspaceCenter = false">×</button></div><div class="workspace-form"><div class="form-grid"><label>工作空间名称<input v-model="workspaceForm.name" maxlength="100" placeholder="例如：毕业设计项目" /></label><label>工作空间描述<input v-model="workspaceForm.description" maxlength="255" placeholder="说明这个空间的用途" /></label></div><div class="form-actions"><button class="row-action" @click="showWorkspaceCenter = false">取消</button><button class="generate-button save-model" :disabled="workspaceBusy" @click="saveWorkspace">{{ workspaceBusy ? '保存中...' : workspaceMode === 'create' ? '创建空间' : '保存修改' }}</button></div></div><template v-if="workspaceMode === 'manage'"><div class="workspace-section"><div class="workspace-section-head"><strong>活动工作空间</strong><span>{{ activeWorkspaces.length }} 个</span></div><div class="workspace-admin-row" v-for="workspace in activeWorkspaces" :key="`active-${workspace.id}`"><div class="workspace-admin-icon"><Code2 :size="15" /></div><div class="model-main"><strong>{{ workspace.name }}</strong><small>{{ workspace.description || '暂无描述' }}</small></div><span v-if="workspace.id === activeWorkspace.id" class="active-label">当前使用</span><button class="row-action" @click="editWorkspace(workspace)"><Pencil :size="12" />编辑</button><button class="row-action danger" :disabled="workspaceBusy" @click="archiveWorkspace(workspace)"><Archive :size="12" />归档</button></div></div><div v-if="archivedWorkspaces.length" class="workspace-section"><div class="workspace-section-head"><strong>已归档工作空间</strong><span>{{ archivedWorkspaces.length }} 个</span></div><div class="workspace-admin-row archived" v-for="workspace in archivedWorkspaces" :key="`archived-${workspace.id}`"><div class="workspace-admin-icon"><Archive :size="15" /></div><div class="model-main"><strong>{{ workspace.name }}</strong><small>{{ workspace.description || '暂无描述' }}</small></div><button class="row-action primary" :disabled="workspaceBusy" @click="restoreWorkspace(workspace)"><RotateCcw :size="12" />恢复</button></div></div></template></section></div>
     <div v-if="showMembers" class="modal-backdrop" @click.self="showMembers = false"><section class="model-modal members-modal"><div class="modal-head"><div><span class="panel-kicker">WORKSPACE TEAM</span><h2>团队成员</h2><p>{{ activeWorkspace.name }} · 只有所有者可以管理成员</p></div><button class="icon-button" title="关闭" @click="showMembers = false">×</button></div><div class="members-toolbar"><span>{{ workspaceMembers.length }} 位成员</span><button class="new-project" :disabled="memberBusy" @click="inviteMember"><Plus :size="15" />邀请成员</button></div><div class="model-list"><div v-for="member in workspaceMembers" :key="member.id" class="member-row"><div class="avatar small-avatar">{{ member.name.slice(0, 1) }}</div><div class="model-main"><strong>{{ member.name }}</strong><small>{{ member.email }}</small></div><span class="member-role">{{ member.role }}</span><button v-if="member.role !== 'OWNER'" class="row-action" @click="changeMemberRole(member)">改角色</button><button v-if="member.role !== 'OWNER'" class="row-action danger" @click="removeMember(member)">移除</button></div><div v-if="workspaceMembers.length === 0" class="empty-model">暂无成员数据。</div></div></section></div>
     <div v-if="showModelCenter" class="modal-backdrop" @click.self="showModelCenter = false"><section class="model-modal"><div class="modal-head"><div><span class="panel-kicker">MODEL SWITCHBOARD</span><h2>自定义模型中心</h2><p>兼容 OpenAI API，可接本地模型、云端模型或第三方中转站。</p></div><button class="icon-button" title="关闭" @click="showModelCenter = false">×</button></div><div class="model-list"><div v-for="config in modelConfigs" :key="config.id" class="model-row" :class="{ active: config.active }"><div class="model-status"><span></span></div><div class="model-main"><strong>{{ config.name }}</strong><small>{{ config.model }} · {{ config.baseUrl }}</small></div><span v-if="config.active" class="active-label">当前使用</span><span v-if="modelTest[config.id]" class="test-label">{{ modelTest[config.id] }}</span><button class="row-action" @click="editModel(config)">编辑</button><button class="row-action" @click="testModel(config.id)">测试</button><button v-if="!config.active" class="row-action primary" @click="activateModel(config.id)">使用</button><button class="row-action danger" @click="removeModel(config.id)">删除</button></div><div v-if="modelConfigs.length === 0" class="empty-model">还没有模型配置，请在下方添加。</div></div><div class="model-form"><div class="form-title">添加或编辑模型</div><div class="form-grid"><label>配置名称<input v-model="modelForm.name" placeholder="例如：我的 DeepSeek 中转" /></label><label>模型名称<input v-model="modelForm.model" placeholder="例如：deepseek-chat" /></label><label class="wide">接口地址<input v-model="modelForm.baseUrl" placeholder="例如：http://127.0.0.1:11434/v1" /></label><label class="wide">API Key <span class="optional">可选，本地 Ollama 不需要</span><input v-model="modelForm.apiKey" type="password" placeholder="留空以保留当前 Key" /></label></div><div class="form-actions"><button class="row-action" @click="resetModelForm">清空</button><button class="generate-button save-model" :disabled="modelBusy" @click="saveModel">{{ modelBusy ? '保存中...' : '保存配置' }}</button></div></div></section></div>
     <transition name="toast"><div v-if="toast" class="toast-message"><Sparkles :size="16" />{{ toast }}</div></transition>

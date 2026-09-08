@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
   name VARCHAR(100) NOT NULL,
   description VARCHAR(255) NOT NULL DEFAULT '',
   owner_id VARCHAR(36) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_workspace_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
   INDEX idx_workspace_owner (owner_id)
