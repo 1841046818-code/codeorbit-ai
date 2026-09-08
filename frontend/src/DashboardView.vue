@@ -14,7 +14,9 @@ import {
   FolderKanban,
   Gauge,
   GitBranch,
+  ImagePlus,
   LayoutDashboard,
+  MessageCircle,
   Play,
   Pencil,
   Plus,
@@ -22,6 +24,7 @@ import {
   RotateCcw,
   Search,
   Settings2,
+  Send,
   Sparkles,
   TimerReset,
   TriangleAlert,
@@ -73,6 +76,15 @@ const notificationOpen = ref(false)
 const deployments = ref([])
 const deployEnvironment = ref('PREVIEW')
 const deployBusy = ref(false)
+const chatConversations = ref([])
+const activeConversationId = ref('')
+const chatMessages = ref([])
+const chatInput = ref('')
+const chatImage = ref(null)
+const chatImageName = ref('')
+const chatBusy = ref(false)
+const chatLoading = ref(false)
+const chatFileInput = ref(null)
 let timerTicker
 let fileSaveTimer
 
@@ -85,6 +97,7 @@ const files = ref({
 const navItems = [
   { label: '总览', icon: LayoutDashboard },
   { label: '我的项目', icon: FolderKanban },
+  { label: 'AI 对话', icon: MessageCircle },
   { label: 'AI 生成', icon: Sparkles },
   { label: '代码评审', icon: TriangleAlert },
   { label: '专注空间', icon: TimerReset },
@@ -107,6 +120,7 @@ const openReviewCount = computed(() => reviewIssues.value.filter(issue => issue.
 const filteredKnowledge = computed(() => knowledgeEntries.value.filter(entry => `${entry.title} ${entry.content} ${entry.tags}`.toLowerCase().includes(knowledgeQuery.value.trim().toLowerCase())))
 const activeWorkspaces = computed(() => workspaces.value.filter(workspace => workspace.status !== 'ARCHIVED'))
 const archivedWorkspaces = computed(() => workspaces.value.filter(workspace => workspace.status === 'ARCHIVED'))
+const activeModel = computed(() => modelConfigs.value.find(config => config.active) || modelConfigs.value[0] || null)
 
 const issues = [
   { level: '高风险', title: '按钮事件缺少异常处理', file: 'script.js:1', tone: 'danger' },
@@ -223,6 +237,83 @@ async function generateCode() {
 async function loadModelConfigs() {
   try { const response = await fetch(`${API_BASE}/api/ai/config`); if (!response.ok) return; const data = await response.json(); modelConfigs.value = data.configs || []; } catch { /* 后端未启动时保持本地界面可用 */ }
 }
+async function loadChatConversations() {
+  if (!activeWorkspace.value.id) return
+  chatLoading.value = true
+  try {
+    const response = await fetch(`${API_BASE}/api/ai/conversations?workspaceId=${encodeURIComponent(activeWorkspace.value.id)}`, { headers: { Authorization: `Bearer ${getToken()}` } })
+    if (!response.ok) return
+    const data = await response.json()
+    chatConversations.value = data.conversations || []
+    const current = chatConversations.value.find(item => item.id === activeConversationId.value) || chatConversations.value[0]
+    activeConversationId.value = current?.id || ''
+    chatMessages.value = current ? await fetchChatMessages(current.id) : []
+  } catch { chatConversations.value = []; chatMessages.value = [] } finally { chatLoading.value = false }
+}
+async function fetchChatMessages(conversationId) {
+  try {
+    const response = await fetch(`${API_BASE}/api/ai/conversations/${conversationId}/messages`, { headers: { Authorization: `Bearer ${getToken()}` } })
+    if (!response.ok) return []
+    const data = await response.json()
+    return data.messages || []
+  } catch { return [] }
+}
+async function openChatConversation(conversation) {
+  activeConversationId.value = conversation.id
+  chatMessages.value = await fetchChatMessages(conversation.id)
+}
+async function createChatConversation() {
+  if (!activeWorkspace.value.id) { toast.value = '请先选择一个工作空间。'; return }
+  try {
+    const response = await fetch(`${API_BASE}/api/ai/conversations`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` }, body: JSON.stringify({ workspaceId: activeWorkspace.value.id, title: '新对话' }) })
+    const data = await response.json()
+    if (!response.ok || !data.conversation) throw new Error(data.message || '新建对话失败')
+    chatConversations.value.unshift(data.conversation)
+    activeConversationId.value = data.conversation.id
+    chatMessages.value = []
+    chatInput.value = ''
+    clearChatImage()
+  } catch (error) { toast.value = error.message || '新建对话失败。' }
+}
+function clearChatImage() {
+  chatImage.value = null
+  chatImageName.value = ''
+  if (chatFileInput.value) chatFileInput.value.value = ''
+}
+function chooseChatImage() { chatFileInput.value?.click() }
+function handleChatImage(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  if (!file.type.startsWith('image/')) { toast.value = '请选择图片文件。'; return }
+  if (file.size > 6 * 1024 * 1024) { toast.value = '图片不能超过 6MB。'; return }
+  const reader = new FileReader()
+  reader.onload = () => { chatImage.value = reader.result; chatImageName.value = file.name }
+  reader.readAsDataURL(file)
+}
+async function sendChatMessage() {
+  const content = chatInput.value.trim()
+  if (chatBusy.value || (!content && !chatImage.value)) return
+  if (!activeConversationId.value) await createChatConversation()
+  if (!activeConversationId.value) return
+  const outgoingText = chatInput.value
+  const outgoingImage = chatImage.value
+  chatBusy.value = true
+  chatInput.value = ''
+  clearChatImage()
+  try {
+    const response = await fetch(`${API_BASE}/api/ai/conversations/${activeConversationId.value}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` }, body: JSON.stringify({ content: outgoingText, imageData: outgoingImage || '', imageMimeType: outgoingImage?.split(';')[0]?.replace('data:', '') || '' }) })
+    const data = await response.json()
+    if (!response.ok || !data.assistantMessage) throw new Error(data.message || '模型暂时不可用')
+    chatMessages.value.push(data.userMessage, data.assistantMessage)
+    const conversation = chatConversations.value.find(item => item.id === activeConversationId.value)
+    if (conversation && data.conversation) Object.assign(conversation, data.conversation)
+    chatConversations.value.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+  } catch (error) {
+    chatInput.value = outgoingText
+    if (outgoingImage) { chatImage.value = outgoingImage; chatImageName.value = '已选择图片' }
+    toast.value = error.message || '消息发送失败，请检查模型配置。'
+  } finally { chatBusy.value = false }
+}
 function workspacePreferenceKey() {
   return `codeorbit_active_workspace:${currentUser.value.id || currentUser.value.email || 'guest'}`
 }
@@ -243,6 +334,7 @@ async function loadWorkspaces() {
     await loadStats()
     await loadCheckin()
     await loadKnowledge()
+    if (activeNav.value === 'AI 对话') await loadChatConversations()
   } catch { /* 后端未启动时保留本地工作台 */ }
 }
 async function switchWorkspace(workspace) {
@@ -257,6 +349,7 @@ async function switchWorkspace(workspace) {
   await loadStats()
   await loadCheckin()
   await loadKnowledge()
+  if (activeNav.value === 'AI 对话') await loadChatConversations()
   if (showMembers.value) await loadMembers()
 }
 function openWorkspaceCreate() {
@@ -556,6 +649,7 @@ async function removeModel(id) { try { const response = await fetch(`${API_BASE}
 function selectNav(label) {
   activeNav.value = label
   if (label === '成长数据') toast.value = `已加载 ${stats.value.completedTaskCount} 个完成任务和 ${checkin.value.total} 天签到记录。`
+  else if (label === 'AI 对话') loadChatConversations()
   else if (label !== '总览') toast.value = `${label} 模块正在使用当前项目数据。`
 }
 
@@ -657,6 +751,26 @@ onUnmounted(() => { window.clearInterval(ticker); window.clearInterval(timerTick
           <div class="project-toolbar"><div class="project-search"><Search :size="14" /><input v-model="projectQuery" placeholder="搜索项目" /></div><select v-model="projectStatusFilter"><option value="ALL">全部状态</option><option value="IN_PROGRESS">进行中</option><option value="DONE">已完成</option></select></div>
           <div class="project-page-grid"><button v-for="project in filteredProjects" :key="project.id" class="project-card" :class="{ 'featured-project': selectedProject?.id === project.id }" @click="selectedProject = project; loadTasks(project.id); loadProjectFiles(project.id); loadReviews(project.id); loadDeployments(project.id)"><div class="project-icon"><FolderKanban :size="19" /></div><div class="project-info"><div class="project-title"><strong>{{ project.name }}</strong><span class="project-badge">{{ project.status === 'DONE' ? '已完成' : '进行中' }}</span></div><p>{{ project.description || project.techStack }}</p><div class="progress-line"><span :style="{ width: `${project.progress}%` }"></span></div><div class="project-meta"><span>{{ project.progress }}% 完成</span><span>{{ project.taskCount }} 个任务</span></div></div><ChevronRight :size="17" /></button></div>
           <div v-if="selectedProject" class="project-detail-card"><div class="page-view-head"><div><span class="panel-kicker">PROJECT DETAIL</span><h2>{{ selectedProject.name }}</h2><p>{{ selectedProject.description || '暂无项目描述' }}</p></div><div class="project-actions"><button class="row-action" @click="editProject(selectedProject)">编辑</button><button class="row-action danger" @click="removeProject(selectedProject)">删除</button></div></div><div class="detail-progress"><span :style="{ width: `${selectedProject.progress}%` }"></span></div><div class="project-detail-stats"><span>进度 <strong>{{ selectedProject.progress }}%</strong></span><span>任务 <strong>{{ projectTasks.length }}</strong></span><span>待处理评审 <strong>{{ openReviewCount }}</strong></span></div></div>
+        </section>
+        <section v-if="activeNav === 'AI 对话'" class="page-view panel chat-page-view">
+          <div class="page-view-head"><div><span class="panel-kicker">AI CONVERSATION</span><h2>AI 对话</h2><p>像 DeepSeek 一样连续对话，也可以上传图片让 AI 帮你理解内容。</p></div><div class="chat-model-status"><span class="status-dot"></span>{{ activeModel?.name || '未配置模型' }} · {{ activeModel?.model || '请先配置' }}</div></div>
+          <div class="chat-layout">
+            <aside class="chat-history">
+              <button class="new-project chat-new-button" @click="createChatConversation"><Plus :size="15" />新建对话</button>
+              <div v-if="chatLoading" class="task-empty">正在加载对话...</div>
+              <button v-for="conversation in chatConversations" :key="conversation.id" class="chat-history-item" :class="{ selected: conversation.id === activeConversationId }" @click="openChatConversation(conversation)"><MessageCircle :size="14" /><span>{{ conversation.title }}</span></button>
+              <div v-if="!chatLoading && chatConversations.length === 0" class="chat-history-empty">还没有对话<br />发送第一条消息开始。</div>
+            </aside>
+            <div class="chat-main">
+              <div class="chat-messages" aria-live="polite">
+                <div v-if="chatMessages.length === 0" class="chat-welcome"><div class="chat-welcome-icon"><MessageCircle :size="25" /></div><h3>开始一段新对话</h3><p>可以提问、分析代码，或上传截图让 AI 识别内容。</p></div>
+                <article v-for="message in chatMessages" :key="message.id" class="chat-message" :class="message.role"><div class="chat-avatar">{{ message.role === 'user' ? currentUser.name.slice(0, 1) : 'AI' }}</div><div class="chat-bubble"><img v-if="message.imageData" class="chat-image" :src="message.imageData" alt="用户上传的图片" /><p v-if="message.content">{{ message.content }}</p><small>{{ new Date(message.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}</small></div></article>
+                <div v-if="chatBusy" class="chat-message assistant"><div class="chat-avatar">AI</div><div class="chat-bubble chat-thinking"><span></span><span></span><span></span>正在思考...</div></div>
+              </div>
+              <div v-if="chatImage" class="chat-attachment"><img :src="chatImage" alt="待发送图片" /><div><strong>{{ chatImageName }}</strong><small>图片将随下一条消息发送</small></div><button class="icon-button small" title="移除图片" @click="clearChatImage">×</button></div>
+              <div class="chat-composer"><textarea v-model="chatInput" placeholder="输入消息，Enter 发送，Shift + Enter 换行" rows="3" @keydown.enter.exact.prevent="sendChatMessage"></textarea><div class="chat-composer-actions"><input ref="chatFileInput" type="file" accept="image/*" hidden @change="handleChatImage" /><button class="row-action chat-image-button" title="添加图片" @click="chooseChatImage"><ImagePlus :size="16" />添加图片</button><span>支持 JPG、PNG、WEBP，单张不超过 6MB</span><button class="generate-button chat-send-button" :disabled="chatBusy || (!chatInput.trim() && !chatImage)" @click="sendChatMessage"><Send :size="15" />{{ chatBusy ? '发送中' : '发送' }}</button></div></div>
+            </div>
+          </div>
         </section>
         <section v-if="activeNav === 'AI 生成'" class="page-view panel ai-page-view"><div class="page-view-head"><div><span class="panel-kicker">AI GENERATOR</span><h2>AI 生成</h2><p>描述需求，生成代码并保存到当前项目。</p></div><button class="model-chip" @click="openModelCenter">模型中心</button></div><textarea v-model="prompt" class="prompt-input large-prompt" placeholder="例如：生成一个带流星动画的登录页..." @keydown.enter.exact.prevent="generateCode"></textarea><button class="generate-button" :disabled="isGenerating" @click="generateCode"><Sparkles :size="16" />{{ isGenerating ? '正在生成...' : '生成代码' }}</button><div class="ai-result"><div class="result-head"><strong>当前项目：{{ selectedProject?.name || '未选择项目' }}</strong><span>{{ selectedProject ? '生成内容会自动保存' : '请先在我的项目中选择项目' }}</span></div><pre>{{ files['index.html'] }}</pre></div></section>
         <section v-if="activeNav === '专注空间'" class="page-view panel focus-page-view"><div class="page-view-head"><div><span class="panel-kicker">FOCUS SPACE</span><h2>专注空间</h2><p>为当前项目记录专注时长。</p></div><TimerReset :size="21" /></div><div class="focus-clock">{{ timerLabel }}</div><p class="focus-caption">{{ activeSession ? '正在记录当前项目专注时长' : selectedProject ? `当前项目：${selectedProject.name}` : '请先选择项目' }}</p><button class="run-button focus-button" @click="toggleTimer"><TimerReset :size="15" />{{ activeSession ? '结束计时' : '开始计时' }}</button><div class="focus-stats"><div><strong>{{ (stats.focusSeconds / 3600).toFixed(1) }}</strong><span>累计专注小时</span></div><div><strong>{{ checkin.streak }}</strong><span>连续签到天数</span></div><div><strong>{{ stats.completedTaskCount }}</strong><span>已完成任务</span></div></div></section>

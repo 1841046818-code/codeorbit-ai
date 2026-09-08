@@ -740,6 +740,79 @@ public class CodeOrbitApplication {
             return Map.of("ok", response.statusCode() < 400, "status", response.statusCode(), "message", response.statusCode() < 400 ? "连接成功" : "接口返回 HTTP " + response.statusCode());
         }
 
+        @GetMapping("/conversations")
+        public Map<String, Object> conversations(@RequestHeader(value = "Authorization", required = false) String authorization, @RequestParam String workspaceId) {
+            UserView user = requireUser(authorization);
+            requireWorkspaceMember(user.id(), workspaceId);
+            List<AiConversationView> items = jdbc.query("SELECT id, workspace_id, title, created_at, updated_at FROM ai_conversations WHERE workspace_id = ? AND user_id = ? ORDER BY updated_at DESC", (result, row) -> new AiConversationView(result.getString("id"), result.getString("workspace_id"), result.getString("title"), result.getTimestamp("created_at").toInstant().toString(), result.getTimestamp("updated_at").toInstant().toString()), workspaceId, user.id());
+            return Map.of("conversations", items);
+        }
+
+        @PostMapping("/conversations")
+        public Map<String, Object> createConversation(@RequestHeader(value = "Authorization", required = false) String authorization, @RequestBody AiConversationRequest input) {
+            UserView user = requireUser(authorization);
+            requireWorkspaceMember(user.id(), input.workspaceId());
+            String title = input.title() == null || input.title().isBlank() ? "新对话" : input.title().trim();
+            String id = UUID.randomUUID().toString();
+            jdbc.update("INSERT INTO ai_conversations (id, workspace_id, user_id, title) VALUES (?, ?, ?, ?)", id, input.workspaceId(), user.id(), title);
+            return Map.of("conversation", new AiConversationView(id, input.workspaceId(), title, Instant.now().toString(), Instant.now().toString()));
+        }
+
+        @GetMapping("/conversations/{conversationId}/messages")
+        public Map<String, Object> messages(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String conversationId) {
+            UserView user = requireUser(authorization);
+            requireConversationOwner(user.id(), conversationId);
+            return Map.of("messages", loadMessageViews(conversationId));
+        }
+
+        @PostMapping(value = "/conversations/{conversationId}/messages", consumes = MediaType.APPLICATION_JSON_VALUE)
+        public Map<String, Object> sendMessage(@RequestHeader(value = "Authorization", required = false) String authorization, @PathVariable String conversationId, @RequestBody AiMessageRequest input) throws Exception {
+            UserView user = requireUser(authorization);
+            ConversationOwner conversation = requireConversationOwner(user.id(), conversationId);
+            String content = input.content() == null ? "" : input.content().trim();
+            String imageData = input.imageData() == null ? "" : input.imageData().trim();
+            if (content.isBlank() && imageData.isBlank()) throw new IllegalArgumentException("请输入消息或选择一张图片");
+            if (imageData.length() > 8_000_000) throw new IllegalArgumentException("图片过大，请选择 6MB 以内的图片");
+            if (!imageData.isBlank() && !imageData.startsWith("data:image/")) throw new IllegalArgumentException("图片格式不受支持");
+            String userMessageId = UUID.randomUUID().toString();
+            jdbc.update("INSERT INTO ai_messages (id, conversation_id, role, content, image_data, image_mime_type) VALUES (?, ?, 'user', ?, ?, ?)", userMessageId, conversationId, content, imageData.isBlank() ? null : imageData, input.imageMimeType());
+            jdbc.update("UPDATE ai_conversations SET updated_at = CURRENT_TIMESTAMP, title = CASE WHEN title = '新对话' AND ? <> '' THEN LEFT(?, 180) ELSE title END WHERE id = ?", content, content, conversationId);
+
+            List<AiMessageRow> history = jdbc.query("SELECT role, content, image_data FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC", (result, row) -> new AiMessageRow(result.getString("role"), result.getString("content"), result.getString("image_data")), conversationId);
+            int start = Math.max(0, history.size() - 20);
+            StringBuilder messagesJson = new StringBuilder("[{");
+            messagesJson.append("\"role\":\"system\",\"content\":\"").append(json("你是星码空间里的 AI 对话助手，回答清晰、可靠；当用户发送图片时，结合图片内容回答。" )).append("\"}");
+            for (int index = start; index < history.size(); index++) {
+                AiMessageRow row = history.get(index);
+                messagesJson.append(",").append(messageJson(row));
+            }
+            messagesJson.append("]");
+            AiConfig config = activeConfig();
+            String body = "{\"model\":\"" + json(config.model()) + "\",\"temperature\":0.4,\"messages\":" + messagesJson + "}";
+            HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(config.baseUrl() + "/chat/completions")).timeout(Duration.ofSeconds(120)).header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(body));
+            if (!config.apiKey().isBlank()) request.header("Authorization", "Bearer " + config.apiKey());
+            HttpResponse<String> response = client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 400) throw new IllegalStateException("模型接口返回 HTTP " + response.statusCode());
+            String answer = extractContent(response.body());
+            String assistantId = UUID.randomUUID().toString();
+            jdbc.update("INSERT INTO ai_messages (id, conversation_id, role, content) VALUES (?, ?, 'assistant', ?)", assistantId, conversationId, answer);
+            jdbc.update("UPDATE ai_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", conversationId);
+            return Map.of("conversation", new AiConversationView(conversation.id(), conversation.workspaceId(), conversation.title(), conversation.createdAt(), Instant.now().toString()), "userMessage", messageView(userMessageId, conversationId, "user", content, imageData.isBlank() ? null : imageData, input.imageMimeType()), "assistantMessage", messageView(assistantId, conversationId, "assistant", answer, null, null), "model", config.model());
+        }
+
+        private String messageJson(AiMessageRow row) {
+            String role = json(row.role());
+            if (row.imageData() == null || row.imageData().isBlank()) return "{\"role\":\"" + role + "\",\"content\":\"" + json(row.content()) + "\"}";
+            return "{\"role\":\"" + role + "\",\"content\":[{\"type\":\"text\",\"text\":\"" + json(row.content().isBlank() ? "请描述这张图片。" : row.content()) + "\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"" + json(row.imageData()) + "\"}}]}";
+        }
+
+        private List<AiMessageView> loadMessageViews(String conversationId) {
+            return jdbc.query("SELECT id, conversation_id, role, content, image_data, image_mime_type, created_at FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC", (result, row) -> messageView(result.getString("id"), result.getString("conversation_id"), result.getString("role"), result.getString("content"), result.getString("image_data"), result.getString("image_mime_type")), conversationId);
+        }
+        private AiMessageView messageView(String id, String conversationId, String role, String content, String imageData, String imageMimeType) { return new AiMessageView(id, conversationId, role, content, imageData, imageMimeType, Instant.now().toString()); }
+        private ConversationOwner requireConversationOwner(String userId, String conversationId) { return jdbc.queryForObject("SELECT id, workspace_id, title, created_at FROM ai_conversations WHERE id = ? AND user_id = ?", (result, row) -> new ConversationOwner(result.getString("id"), result.getString("workspace_id"), result.getString("title"), result.getTimestamp("created_at").toInstant().toString()), conversationId, userId); }
+        private void requireWorkspaceMember(String userId, String workspaceId) { if (workspaceId == null || jdbc.queryForObject("SELECT COUNT(*) FROM workspace_members wm JOIN workspaces w ON w.id = wm.workspace_id WHERE wm.workspace_id = ? AND wm.user_id = ? AND w.status = 'ACTIVE'", Integer.class, workspaceId, userId) == 0) throw new IllegalArgumentException("工作空间不存在或无权访问"); }
+
         @PostMapping(value = "/code/generate", consumes = MediaType.APPLICATION_JSON_VALUE)
         public Map<String, String> generate(@RequestBody GenerateRequest input) throws Exception {
             if (input.prompt() == null || input.prompt().isBlank()) throw new IllegalArgumentException("请输入代码需求");
@@ -777,6 +850,12 @@ public class CodeOrbitApplication {
 
     record AiConfig(String id, String name, String baseUrl, String apiKey, String model, boolean active) {}
     record GenerateRequest(String prompt) {}
+    record AiConversationRequest(String workspaceId, String title) {}
+    record AiMessageRequest(String content, String imageData, String imageMimeType) {}
+    record AiConversationView(String id, String workspaceId, String title, String createdAt, String updatedAt) {}
+    record AiMessageView(String id, String conversationId, String role, String content, String imageData, String imageMimeType, String createdAt) {}
+    record AiMessageRow(String role, String content, String imageData) {}
+    record ConversationOwner(String id, String workspaceId, String title, String createdAt) {}
     record RegisterRequest(String name, String email, String password) {}
     record LoginRequest(String email, String password) {}
     record StoredUser(String id, String name, String email, String passwordHash) {}
