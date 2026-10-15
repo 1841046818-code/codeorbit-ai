@@ -52,7 +52,7 @@ The product adds two signed-in web experiences: an AI coding workbench inspired 
 - OpenAI-compatible custom providers use a caller-entered base URL and model identifier. Model discovery may be offered when the provider's `/models` endpoint is compatible; manual model entry remains available.
 - Ollama/llama.cpp running as the product's managed service is a server-configured provider and does not require a per-user API key. The server's configured default model is selectable only if the service exposes a safe model list; otherwise display the configured model as read-only.
 - A connection test makes a bounded, non-streaming request and returns a safe success/failure message. It never returns provider response headers or secrets.
-- The selected provider/model is stored as a per-user default and can be overridden for an individual workbench request. Canvas AI actions use the same selection control and provider service.
+- The selected provider/model is stored as a per-user default and can be overridden for an individual workbench request. Canvas has its own model selector and an in-canvas entry to manage connections; both surfaces share the same per-user connection profiles and provider service, so credentials are configured only once.
 - Credentials are encrypted at rest using authenticated encryption (AES-256-GCM) with a required server-side encryption key from the environment. Ciphertext, nonce, and authentication tag are persisted separately or in a versioned envelope. Decryption happens only in server code.
 - Read APIs return a `hasApiKey` flag and a masked hint only. Updating a credential replaces it; an omitted key preserves the existing encrypted value. Deleting a connection removes its secret.
 - Never log API keys, authorization headers, or full provider request objects. Error responses are sanitized.
@@ -63,7 +63,7 @@ The product adds two signed-in web experiences: an AI coding workbench inspired 
 
 - Provide an infinite 2D workspace with pan, zoom, fit-to-content, node selection, drag, keyboard delete, undo/redo, and autosave with visible save/error status.
 - Initial node types: text/note, image or uploaded-file reference, and AI prompt/result. Users can connect nodes to express input/context relationships; AI actions use only connected or explicitly selected context.
-- AI generation creates a new result node and never destroys source nodes. The user may choose the provider/model for a generation.
+- AI generation creates a new result node and never destroys source nodes. A model selector is available in the canvas toolbar for each generation, with a shortcut to configure or test model connections without leaving the canvas.
 - Support creating, renaming, duplicating, and deleting canvases; export a canvas as JSON and a readable Markdown summary. Imported content must be validated and size-limited.
 - No multiplayer sync, executable nodes, arbitrary embedded HTML, or external URL fetching in the first release.
 
